@@ -128,16 +128,16 @@ pub fn make_item_authenticated_data_004(
         map.insert("kp".to_string(), canonicalize_json(kp));
     }
 
-    if let Some(ksi) = key_system_identifier {
-        if !ksi.trim().is_empty() {
-            map.insert("ksi".to_string(), Value::String(ksi.trim().to_string()));
-        }
+    if let Some(ksi) = key_system_identifier
+        && !ksi.trim().is_empty()
+    {
+        map.insert("ksi".to_string(), Value::String(ksi.trim().to_string()));
     }
 
-    if let Some(svu) = shared_vault_uuid {
-        if !svu.trim().is_empty() {
-            map.insert("svu".to_string(), Value::String(svu.trim().to_string()));
-        }
+    if let Some(svu) = shared_vault_uuid
+        && !svu.trim().is_empty()
+    {
+        map.insert("svu".to_string(), Value::String(svu.trim().to_string()));
     }
 
     Ok(canonicalize_json(&Value::Object(map)))
