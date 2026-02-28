@@ -1,0 +1,19 @@
+[package]
+name = "ink-sync"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono.workspace = true
+ink-api = { path = "../ink-api" }
+ink-core = { path = "../ink-core" }
+ink-crypto = { path = "../ink-crypto" }
+ink-store = { path = "../ink-store" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+httpmock = "0.7.0"
+ink-fs = { path = "../ink-fs" }
+tempfile = "3.23.0"

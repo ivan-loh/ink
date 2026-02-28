@@ -1,0 +1,18 @@
+[package]
+name = "ink-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+base64.workspace = true
+hex.workspace = true
+ink-core = { path = "../ink-core" }
+rand.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+httpmock = "0.7.0"

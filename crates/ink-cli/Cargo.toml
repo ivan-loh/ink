@@ -1,0 +1,31 @@
+[package]
+name = "ink-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ink"
+path = "src/main.rs"
+
+[dependencies]
+chrono.workspace = true
+clap.workspace = true
+ink-api = { path = "../ink-api" }
+ink-core = { path = "../ink-core" }
+ink-crypto = { path = "../ink-crypto" }
+ink-fs = { path = "../ink-fs" }
+ink-store = { path = "../ink-store" }
+ink-sync = { path = "../ink-sync" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+assert_cmd = "2.1.1"
+httpmock = "0.7.0"
+tempfile = "3.23.0"

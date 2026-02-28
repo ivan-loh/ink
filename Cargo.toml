@@ -1,0 +1,36 @@
+[workspace]
+members = [
+  "crates/ink-api",
+  "crates/ink-cli",
+  "crates/ink-core",
+  "crates/ink-crypto",
+  "crates/ink-fs",
+  "crates/ink-store",
+  "crates/ink-sync",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+argon2 = "0.5.3"
+base64 = "0.22.1"
+chacha20poly1305 = "0.10.1"
+chrono = { version = "0.4.41", features = ["serde", "clock"] }
+clap = { version = "4.5.40", features = ["derive"] }
+hex = "0.4.3"
+rand = "0.8.5"
+reqwest = { version = "0.12.24", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+rusqlite = { version = "0.32.1", features = ["bundled"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+sha2 = "0.10.9"
+thiserror = "2.0.12"
+toml = "0.8.23"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt", "json", "ansi"] }
+uuid = { version = "1.18.1", features = ["serde", "v4"] }
+walkdir = "2.5.0"

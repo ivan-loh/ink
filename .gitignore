@@ -1,0 +1,29 @@
+# Build output and caches
+/.cache/
+/target/
+
+# Local credentials and env files
+.env
+.env.*
+!.env.example
+.envrc
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.kdbx
+secrets/
+.secrets/
+credentials/
+*.credentials
+
+# Local runtime sandbox data
+/sandbox/
+/reference/
+# OS/editor noise
+**/.DS_Store
+.idea/
+.vscode/
+# Local references (not committed)
+/references/
