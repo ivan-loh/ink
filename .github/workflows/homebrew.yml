@@ -1,0 +1,134 @@
+name: Homebrew Tap
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag (example: v1.2.3)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  update-tap:
+    name: Update Homebrew Tap
+    runs-on: ubuntu-latest
+    env:
+      BIN_NAME: ink
+      TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO }}
+      PUSH_TOKEN: ${{ secrets.PACKAGE_REPO_PUSH_TOKEN }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Resolve release tag
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+          if [[ -z "${tag}" ]]; then
+            echo "Unable to resolve release tag." >&2
+            exit 1
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate tap configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${TAP_REPO}" ]]; then
+            echo "Repository variable HOMEBREW_TAP_REPO is not set." >&2
+            exit 1
+          fi
+          if [[ -z "${PUSH_TOKEN}" ]]; then
+            echo "Repository secret PACKAGE_REPO_PUSH_TOKEN is not set." >&2
+            exit 1
+          fi
+
+      - name: Generate and publish formula
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${{ steps.meta.outputs.tag }}"
+          version="${{ steps.meta.outputs.version }}"
+
+          release_json="$(gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" --json assets)"
+
+          linux_asset="${BIN_NAME}-${tag}-x86_64-unknown-linux-gnu.tar.gz"
+          mac_intel_asset="${BIN_NAME}-${tag}-x86_64-apple-darwin.tar.gz"
+          mac_arm_asset="${BIN_NAME}-${tag}-aarch64-apple-darwin.tar.gz"
+
+          linux_url="$(jq -r --arg name "${linux_asset}" '.assets[] | select(.name == $name) | .url' <<< "${release_json}")"
+          linux_sha="$(jq -r --arg name "${linux_asset}" '.assets[] | select(.name == $name) | .digest | sub("^sha256:"; "")' <<< "${release_json}")"
+          mac_intel_url="$(jq -r --arg name "${mac_intel_asset}" '.assets[] | select(.name == $name) | .url' <<< "${release_json}")"
+          mac_intel_sha="$(jq -r --arg name "${mac_intel_asset}" '.assets[] | select(.name == $name) | .digest | sub("^sha256:"; "")' <<< "${release_json}")"
+          mac_arm_url="$(jq -r --arg name "${mac_arm_asset}" '.assets[] | select(.name == $name) | .url' <<< "${release_json}")"
+          mac_arm_sha="$(jq -r --arg name "${mac_arm_asset}" '.assets[] | select(.name == $name) | .digest | sub("^sha256:"; "")' <<< "${release_json}")"
+
+          for required in linux_url linux_sha mac_intel_url mac_intel_sha mac_arm_url mac_arm_sha; do
+            value="${!required}"
+            if [[ -z "${value}" || "${value}" == "null" ]]; then
+              echo "Missing required release asset metadata: ${required}" >&2
+              exit 1
+            fi
+          done
+
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
+          git clone "https://x-access-token:${PUSH_TOKEN}@github.com/${TAP_REPO}.git" "${tmp}/tap"
+
+          mkdir -p "${tmp}/tap/Formula"
+          cat > "${tmp}/tap/Formula/${BIN_NAME}.rb" <<EOF
+          class Ink < Formula
+            desc "CLI for Standard Notes"
+            homepage "https://github.com/${GITHUB_REPOSITORY}"
+            license "MIT"
+            version "${version}"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "${mac_arm_url}"
+                sha256 "${mac_arm_sha}"
+              else
+                url "${mac_intel_url}"
+                sha256 "${mac_intel_sha}"
+              end
+            end
+
+            on_linux do
+              url "${linux_url}"
+              sha256 "${linux_sha}"
+            end
+
+            def install
+              bin.install "ink"
+              doc.install "README.md" if File.exist?("README.md")
+            end
+
+            test do
+              assert_match "ink ", shell_output("#{bin}/ink --version")
+            end
+          end
+          EOF
+
+          cd "${tmp}/tap"
+          if git diff --quiet; then
+            echo "No formula changes detected."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "Formula/${BIN_NAME}.rb"
+          git commit -m "Update ${BIN_NAME} formula for ${tag}"
+          git push origin HEAD

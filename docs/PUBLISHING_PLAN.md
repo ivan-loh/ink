@@ -16,6 +16,10 @@ This document describes how to ship `ink` binaries from GitHub Actions and publi
     - `x86_64-pc-windows-msvc`
   - Packages binaries as `.tar.gz` (Unix) and `.zip` (Windows)
   - Uploads release assets and `SHA256SUMS.txt` to GitHub Releases
+- `Homebrew Tap` workflow on published releases or manual trigger:
+  - Pulls release asset URLs/checksums from GitHub Releases
+  - Updates `Formula/ink.rb` in `HOMEBREW_TAP_REPO`
+  - Commits/pushes formula update to the tap repository
 
 ## Release Process
 
@@ -35,7 +39,7 @@ git push origin v0.1.0
 | Phase | Target | Delivery Mode | Notes |
 |---|---|---|---|
 | 1 | GitHub Releases | Automated now | Release artifacts are already produced by CI/CD. |
-| 2 | Homebrew (custom tap) | Next | Add formula updates to a `homebrew-ink` tap repo from release assets/checksums. |
+| 2 | Homebrew (custom tap) | Automated now | Formula updates are pushed to `homebrew-ink` on each release. |
 | 3 | Scoop (Windows) | Next | Add manifest updates in a scoop bucket repo using release checksums. |
 | 4 | Winget | Optional | Submit manifest updates to `microsoft/winget-pkgs` on each release. |
 | 5 | crates.io (`cargo install`) | Optional | Requires publish strategy for workspace crates (internal deps currently path-based). |
@@ -50,6 +54,13 @@ git push origin v0.1.0
 - Add repo variables:
   - `HOMEBREW_TAP_REPO` (example: `ivan-loh/homebrew-ink`)
   - `SCOOP_BUCKET_REPO` (example: `ivan-loh/scoop-ink`)
+
+## Homebrew User Install
+
+```bash
+brew tap ivan-loh/ink
+brew install ink
+```
 
 ## Operational Notes
 

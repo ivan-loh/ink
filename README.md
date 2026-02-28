@@ -8,6 +8,13 @@ Examples below use `ink`. If `ink` is not on `PATH`, run commands as:
 cargo run -q -p ink-cli -- <command> ...
 ```
 
+## Install (Homebrew)
+
+```bash
+brew tap ivan-loh/ink
+brew install ink
+```
+
 ## Quick Start
 
 1. Build the binary:
@@ -121,4 +128,5 @@ If local workspace state is corrupted:
 
 - CI runs on every push/PR via GitHub Actions (`fmt`, `clippy`, `test`).
 - Tagged releases (`v*`) build cross-platform binaries and publish assets to GitHub Releases.
-- Publishing roadmap for package managers is documented in `docs/PUBLISHING_PLAN.md`.
+- Homebrew tap publishes to `ivan-loh/homebrew-ink` (install with `brew tap ivan-loh/ink`).
+- Publishing roadmap for remaining package managers is documented in `docs/PUBLISHING_PLAN.md`.
