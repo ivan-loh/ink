@@ -148,7 +148,7 @@ pub(crate) fn cmd_note(command: NoteCommand, globals: &GlobalOptions) -> InkResu
                     let mut tag_item = engine.make_encrypted_tag_item(
                         &Uuid::new_v4().to_string(),
                         &tag_selector,
-                        &[note_uuid.clone()],
+                        std::slice::from_ref(&note_uuid),
                         None,
                         &default_items_key.uuid,
                         &default_items_key.items_key,

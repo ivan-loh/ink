@@ -117,10 +117,10 @@ pub fn pull_to_mirror(paths: &WorkspacePaths, notes: &[MirrorNote]) -> InkResult
             select_relative_path_for_note(note, &existing_map, &local_paths_by_uuid, &used_paths);
         used_paths.insert(relative_path.clone());
 
-        if let Some(existing) = existing_map.get(&note.uuid) {
-            if existing.path != relative_path {
-                stale_paths.insert(existing.path.clone());
-            }
+        if let Some(existing) = existing_map.get(&note.uuid)
+            && existing.path != relative_path
+        {
+            stale_paths.insert(existing.path.clone());
         }
 
         let absolute_path = paths.root.join(&relative_path);
@@ -230,10 +230,10 @@ fn select_relative_path_for_note(
         return selected;
     }
 
-    if let Some(existing) = existing_map.get(&note.uuid) {
-        if !used_paths.contains(&existing.path) {
-            return existing.path.clone();
-        }
+    if let Some(existing) = existing_map.get(&note.uuid)
+        && !used_paths.contains(&existing.path)
+    {
+        return existing.path.clone();
     }
 
     unique_slug_path(note, used_paths)
@@ -244,12 +244,11 @@ fn pick_local_candidate_path(
     existing: Option<&MirrorEntry>,
     used_paths: &HashSet<String>,
 ) -> Option<String> {
-    if let Some(existing) = existing {
-        if candidates.iter().any(|path| path == &existing.path)
-            && !used_paths.contains(&existing.path)
-        {
-            return Some(existing.path.clone());
-        }
+    if let Some(existing) = existing
+        && candidates.iter().any(|path| path == &existing.path)
+        && !used_paths.contains(&existing.path)
+    {
+        return Some(existing.path.clone());
     }
 
     candidates
@@ -324,37 +323,37 @@ fn parse_local_note(paths: &WorkspacePaths, path: &Path) -> InkResult<LocalMirro
     let mut updated_at = None;
     let mut text = raw.clone();
 
-    if let Some(stripped) = raw.strip_prefix("---\n") {
-        if let Some(separator_idx) = stripped.find("\n---\n") {
-            let frontmatter = &stripped[..separator_idx];
-            text = stripped[(separator_idx + 5)..].to_string();
+    if let Some(stripped) = raw.strip_prefix("---\n")
+        && let Some(separator_idx) = stripped.find("\n---\n")
+    {
+        let frontmatter = &stripped[..separator_idx];
+        text = stripped[(separator_idx + 5)..].to_string();
 
-            for line in frontmatter.lines() {
-                let Some((key, value)) = line.split_once(':') else {
-                    continue;
-                };
+        for line in frontmatter.lines() {
+            let Some((key, value)) = line.split_once(':') else {
+                continue;
+            };
 
-                match key.trim() {
-                    "uuid" => {
-                        let value = value.trim();
-                        if !value.is_empty() {
-                            uuid = Some(value.to_string());
-                        }
+            match key.trim() {
+                "uuid" => {
+                    let value = value.trim();
+                    if !value.is_empty() {
+                        uuid = Some(value.to_string());
                     }
-                    "title" => {
-                        let value = value.trim();
-                        if !value.is_empty() {
-                            title = value.to_string();
-                        }
-                    }
-                    "updated_at" => {
-                        let value = value.trim();
-                        if !value.is_empty() {
-                            updated_at = Some(value.to_string());
-                        }
-                    }
-                    _ => {}
                 }
+                "title" => {
+                    let value = value.trim();
+                    if !value.is_empty() {
+                        title = value.to_string();
+                    }
+                }
+                "updated_at" => {
+                    let value = value.trim();
+                    if !value.is_empty() {
+                        updated_at = Some(value.to_string());
+                    }
+                }
+                _ => {}
             }
         }
     }

@@ -353,21 +353,21 @@ fn native_push(
                     });
                     continue;
                 }
-            } else if !forcing_local {
-                if let Some(remote_title_match) = remote_by_title.get(&local_note.title) {
-                    conflicts += 1;
-                    next_conflicts.push(SyncConflict {
-                        id: make_conflict_id(&local_note.path),
-                        uuid: Some(uuid.to_string()),
-                        title: local_note.title.clone(),
-                        file: local_note.path.clone(),
-                        reason: "remote note UUID changed for same title".to_string(),
-                        detected_at: Utc::now().to_rfc3339(),
-                        remote_updated_at: remote_title_match.updated_at.clone(),
-                        local_updated_at: local_note.updated_at.clone(),
-                    });
-                    continue;
-                }
+            } else if !forcing_local
+                && let Some(remote_title_match) = remote_by_title.get(&local_note.title)
+            {
+                conflicts += 1;
+                next_conflicts.push(SyncConflict {
+                    id: make_conflict_id(&local_note.path),
+                    uuid: Some(uuid.to_string()),
+                    title: local_note.title.clone(),
+                    file: local_note.path.clone(),
+                    reason: "remote note UUID changed for same title".to_string(),
+                    detected_at: Utc::now().to_rfc3339(),
+                    remote_updated_at: remote_title_match.updated_at.clone(),
+                    local_updated_at: local_note.updated_at.clone(),
+                });
+                continue;
             }
         }
 
