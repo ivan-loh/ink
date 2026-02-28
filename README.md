@@ -116,3 +116,9 @@ If local workspace state is corrupted:
 
 1. Remove `<workspace>/.ink/state.db`.
 2. Run `ink sync pull --workspace <path>` to rebuild local cache/state.
+
+## Release
+
+- CI runs on every push/PR via GitHub Actions (`fmt`, `clippy`, `test`).
+- Tagged releases (`v*`) build cross-platform binaries and publish assets to GitHub Releases.
+- Publishing roadmap for package managers is documented in `docs/PUBLISHING_PLAN.md`.
