@@ -378,15 +378,15 @@ impl StandardNotesApi {
         if let Some(limit) = request.limit {
             body["limit"] = serde_json::json!(limit);
         }
-        if let Some(sync_token) = request.sync_token.as_deref() {
-            if !sync_token.trim().is_empty() {
-                body["sync_token"] = serde_json::json!(sync_token);
-            }
+        if let Some(sync_token) = request.sync_token.as_deref()
+            && !sync_token.trim().is_empty()
+        {
+            body["sync_token"] = serde_json::json!(sync_token);
         }
-        if let Some(cursor_token) = request.cursor_token.as_deref() {
-            if !cursor_token.trim().is_empty() {
-                body["cursor_token"] = serde_json::json!(cursor_token);
-            }
+        if let Some(cursor_token) = request.cursor_token.as_deref()
+            && !cursor_token.trim().is_empty()
+        {
+            body["cursor_token"] = serde_json::json!(cursor_token);
         }
 
         let mut post = self
@@ -396,10 +396,10 @@ impl StandardNotesApi {
             .bearer_auth(access_token)
             .json(&body);
 
-        if let Some(cookie) = access_token_cookie {
-            if !cookie.trim().is_empty() {
-                post = post.header("Cookie", cookie);
-            }
+        if let Some(cookie) = access_token_cookie
+            && !cookie.trim().is_empty()
+        {
+            post = post.header("Cookie", cookie);
         }
 
         parse_json_response(post.send().map_err(network_error)?)
@@ -467,12 +467,11 @@ fn parse_json_response<T: DeserializeOwned>(response: Response) -> InkResult<T> 
     let value = serde_json::from_str::<Value>(&body_text)
         .map_err(|err| InkError::sync(format!("failed to decode API response JSON: {err}")))?;
 
-    if let Some(data) = value.get("data") {
-        if !data.is_null() {
-            if let Ok(parsed) = serde_json::from_value::<T>(data.clone()) {
-                return Ok(parsed);
-            }
-        }
+    if let Some(data) = value.get("data")
+        && !data.is_null()
+        && let Ok(parsed) = serde_json::from_value::<T>(data.clone())
+    {
+        return Ok(parsed);
     }
 
     serde_json::from_value::<T>(value).map_err(|err| {

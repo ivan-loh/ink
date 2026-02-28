@@ -18,6 +18,7 @@ env:
   BIN_NAME: ink
   PACKAGE_NAME: ink-cli
   CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: target
 
 jobs:
   resolve-tag:
@@ -46,7 +47,7 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             archive_ext: tar.gz
-          - os: macos-13
+          - os: macos-14
             target: x86_64-apple-darwin
             archive_ext: tar.gz
           - os: macos-14
@@ -88,7 +89,7 @@ jobs:
           set -euo pipefail
           artifact="${BIN_NAME}-${TAG}-${TARGET}.tar.gz"
           mkdir -p dist
-          cp "target/${TARGET}/release/${BIN_NAME}" "dist/${BIN_NAME}"
+          cp "${CARGO_TARGET_DIR}/${TARGET}/release/${BIN_NAME}" "dist/${BIN_NAME}"
           cp README.md dist/README.md
           tar -C dist -czf "$artifact" "${BIN_NAME}" README.md
           echo "ARTIFACT=$artifact" >> "$GITHUB_ENV"
@@ -102,7 +103,7 @@ jobs:
         run: |
           $artifact = "$env:BIN_NAME-$env:TAG-$env:TARGET.zip"
           New-Item -ItemType Directory -Path dist -Force | Out-Null
-          Copy-Item "target/$env:TARGET/release/$env:BIN_NAME.exe" "dist/$env:BIN_NAME.exe"
+          Copy-Item "$env:CARGO_TARGET_DIR/$env:TARGET/release/$env:BIN_NAME.exe" "dist/$env:BIN_NAME.exe"
           Copy-Item "README.md" "dist/README.md"
           Compress-Archive -Path "dist/$env:BIN_NAME.exe", "dist/README.md" -DestinationPath $artifact -Force
           "ARTIFACT=$artifact" | Out-File -FilePath $env:GITHUB_ENV -Append
