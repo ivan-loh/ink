@@ -610,10 +610,11 @@ pub fn resolve_env_credentials(workspace_root: &Path) -> InkResult<Option<EnvCre
             .or_else(|| values.get("STANDARDNOTES_PASSWORD"))
             .cloned();
 
-        if let (Some(email), Some(password)) = (email, password) {
-            if !email.trim().is_empty() && !password.is_empty() {
-                return Ok(Some(EnvCredentials { email, password }));
-            }
+        if let (Some(email), Some(password)) = (email, password)
+            && !email.trim().is_empty()
+            && !password.is_empty()
+        {
+            return Ok(Some(EnvCredentials { email, password }));
         }
     }
 
@@ -643,10 +644,10 @@ fn resolve_env_file(workspace_root: &Path) -> Option<PathBuf> {
         }
     }
 
-    if let Ok(cwd) = std::env::current_dir() {
-        if let Some(found) = search_upwards_for(&cwd, Path::new(".env")) {
-            return Some(found);
-        }
+    if let Ok(cwd) = std::env::current_dir()
+        && let Some(found) = search_upwards_for(&cwd, Path::new(".env"))
+    {
+        return Some(found);
     }
 
     search_upwards_for(workspace_root, Path::new(".env"))
@@ -723,14 +724,14 @@ fn table_is_empty(conn: &Connection, table: &str, db_path: &Path) -> InkResult<b
 }
 
 fn sqlite_error(action: &str, db_path: &Path, err: SqlError) -> InkError {
-    if let SqlError::SqliteFailure(code, message) = &err {
-        if code.code == ErrorCode::DatabaseCorrupt || code.code == ErrorCode::NotADatabase {
-            let detail = message.as_deref().unwrap_or("sqlite reported corruption");
-            return InkError::io(format!(
-                "failed to {action}: state database '{}' is corrupted ({detail}); remove '.ink/state.db' (or reinitialize the workspace) and run `ink sync pull` to rebuild local cache",
-                db_path.display()
-            ));
-        }
+    if let SqlError::SqliteFailure(code, message) = &err
+        && (code.code == ErrorCode::DatabaseCorrupt || code.code == ErrorCode::NotADatabase)
+    {
+        let detail = message.as_deref().unwrap_or("sqlite reported corruption");
+        return InkError::io(format!(
+            "failed to {action}: state database '{}' is corrupted ({detail}); remove '.ink/state.db' (or reinitialize the workspace) and run `ink sync pull` to rebuild local cache",
+            db_path.display()
+        ));
     }
 
     InkError::io(format!(
