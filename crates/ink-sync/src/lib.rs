@@ -331,10 +331,10 @@ impl<'a> SyncEngine<'a> {
             }
         }
 
-        if notes.is_empty() {
-            if let Some(error) = last_error {
-                return Err(error);
-            }
+        if notes.is_empty()
+            && let Some(error) = last_error
+        {
+            return Err(error);
         }
 
         Ok(notes)
@@ -387,10 +387,10 @@ impl<'a> SyncEngine<'a> {
             }
         }
 
-        if tags.is_empty() {
-            if let Some(error) = last_error {
-                return Err(error);
-            }
+        if tags.is_empty()
+            && let Some(error) = last_error
+        {
+            return Err(error);
         }
 
         Ok(tags)
@@ -565,17 +565,17 @@ fn json_tag_content(title: &str, references: &[String], parent_uuid: Option<&str
         ),
     );
 
-    if let Some(parent_uuid) = parent_uuid {
-        if !parent_uuid.trim().is_empty() {
-            map.insert(
-                "appData".to_string(),
-                json!({
-                    "org.standardnotes.sn": {
-                        "parentId": parent_uuid.trim()
-                    }
-                }),
-            );
-        }
+    if let Some(parent_uuid) = parent_uuid
+        && !parent_uuid.trim().is_empty()
+    {
+        map.insert(
+            "appData".to_string(),
+            json!({
+                "org.standardnotes.sn": {
+                    "parentId": parent_uuid.trim()
+                }
+            }),
+        );
     }
 
     Value::Object(map)
