@@ -2,46 +2,64 @@
 
 `ink` is a workspace-based CLI for Standard Notes.
 
-Examples below use `ink`. If `ink` is not on `PATH`, run commands as:
+## Installation
 
-```bash
-cargo run -q -p ink-cli -- <command> ...
-```
-
-## Install (Homebrew)
+### Homebrew (recommended)
 
 ```bash
 brew tap ivan-loh/ink
 brew install ink
+ink --version
 ```
 
-## Quick Start
-
-1. Build the binary:
+### From source
 
 ```bash
 cargo build -p ink-cli
 cargo run -q -p ink-cli -- --version
 ```
 
-2. Set credentials in `.env` (project root or current shell):
+If `ink` is not on `PATH`, run commands as:
+
+```bash
+cargo run -q -p ink-cli -- <command> ...
+```
+
+## Usage
+
+1. Set credentials in `.env` (project root) or shell:
 
 ```dotenv
 SN_EMAIL=you@example.com
 SN_PASSWORD=your-password
 ```
 
-3. Initialize a workspace:
+2. Initialize a workspace:
 
 ```bash
-cargo run -q -p ink-cli -- init --workspace sandbox/workspace --json
+ink init --workspace sandbox/workspace --json
 ```
 
-4. Authenticate and pull notes:
+3. Authenticate and pull notes from server:
 
 ```bash
-cargo run -q -p ink-cli -- auth login --workspace sandbox/workspace --json
-cargo run -q -p ink-cli -- sync pull --workspace sandbox/workspace --json
+ink auth login --workspace sandbox/workspace --json
+ink sync pull --workspace sandbox/workspace --json
+```
+
+4. Work with notes and tags:
+
+```bash
+ink note list --workspace sandbox/workspace
+ink note new --title "Design note" --text "Initial draft" --workspace sandbox/workspace
+ink tag add design --workspace sandbox/workspace
+ink tag apply --note "Design note" --tag design --workspace sandbox/workspace
+```
+
+5. Push local changes back to server:
+
+```bash
+ink sync push --workspace sandbox/workspace --json
 ```
 
 ## Core Commands
