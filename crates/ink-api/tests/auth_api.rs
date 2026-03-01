@@ -4,6 +4,8 @@ use ink_api::{ItemsSyncRequest, SignInRequest, StandardNotesApi, SyncItemInput};
 use ink_core::ErrorKind;
 use serde_json::json;
 
+const SNJS_HEADER_VALUE: &str = concat!("ink/", env!("CARGO_PKG_VERSION"));
+
 #[test]
 fn get_login_params_uses_v2_when_available() {
     let server = MockServer::start();
@@ -71,7 +73,7 @@ fn sign_in_returns_session_payload() {
     let sign_in = server.mock(|when, then| {
         when.method(POST)
             .path("/v2/login")
-            .header("x-snjs-version", "ink/0.1");
+            .header("x-snjs-version", SNJS_HEADER_VALUE);
         then.status(200).json_body(json!({
             "session": {
                 "access_token": "access-token",
@@ -115,7 +117,7 @@ fn sign_in_sends_special_character_password_verbatim_in_json() {
     let sign_in = server.mock(|when, then| {
         when.method(POST)
             .path("/v2/login")
-            .header("x-snjs-version", "ink/0.1")
+            .header("x-snjs-version", SNJS_HEADER_VALUE)
             .json_body(json!({
                 "api": "20240226",
                 "email": "user@example.com",
@@ -199,7 +201,7 @@ fn refresh_session_returns_updated_session() {
     let refresh = server.mock(|when, then| {
         when.method(POST)
             .path("/v1/sessions/refresh")
-            .header("x-snjs-version", "ink/0.1");
+            .header("x-snjs-version", SNJS_HEADER_VALUE);
         then.status(200).json_body(json!({
             "session": {
                 "access_token": "new-access",

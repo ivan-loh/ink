@@ -13,7 +13,7 @@ use std::time::Duration;
 
 const API_VERSION_20240226: &str = "20240226";
 const HEADER_X_SNJS_VERSION: &str = "x-snjs-version";
-const SNJS_HEADER_VALUE: &str = "ink/0.1";
+const SNJS_HEADER_VALUE: &str = concat!("ink/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Debug, Clone)]
 pub struct StandardNotesApi {
@@ -208,7 +208,7 @@ impl StandardNotesApi {
 
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
-            .user_agent("ink-cli/0.1")
+            .user_agent(format!("ink-cli/{}", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|err| InkError::io(format!("failed to construct API client: {err}")))?;
 
