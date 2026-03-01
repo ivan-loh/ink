@@ -295,6 +295,77 @@ fn auth_status_no_session_returns_auth_exit_code() {
 }
 
 #[test]
+fn auth_preflight_without_session_reports_needs_login() {
+    let server = MockServer::start();
+    let workspace = temp_workspace();
+    init_workspace(&workspace.path, &server.base_url());
+
+    let mut cmd = base_command(&workspace.path);
+    cmd.args(["auth", "preflight", "--json"]);
+
+    let assert = cmd.assert().success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+    let payload: Value = serde_json::from_str(&stdout).expect("json stdout");
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["result"]["authenticated"], false);
+    assert_eq!(payload["result"]["needs_login"], true);
+}
+
+#[test]
+fn auth_preflight_with_session_reports_state() {
+    let server = MockServer::start();
+    let workspace = temp_workspace();
+
+    let login_params = server.mock(|when, then| {
+        when.method(POST).path("/v2/login-params");
+        then.status(200).json_body(json!({
+            "identifier": "user@example.com",
+            "pw_nonce": TEST_PW_NONCE,
+            "version": "004"
+        }));
+    });
+
+    let login = server.mock(|when, then| {
+        when.method(POST).path("/v2/login");
+        then.status(200).json_body(json!({
+            "session": {
+                "access_token": "access-login",
+                "refresh_token": "refresh-login",
+                "access_expiration": 4102444800i64,
+                "refresh_expiration": 4102448400i64,
+                "readonly_access": false
+            },
+            "user": {
+                "uuid": "user-uuid",
+                "email": "user@example.com"
+            }
+        }));
+    });
+
+    init_workspace(&workspace.path, &server.base_url());
+    let _ = run_auth_command(
+        &workspace.path,
+        &["auth", "login", "--json"],
+        Some(("user@example.com", "password-123")),
+    );
+
+    let mut cmd = base_command(&workspace.path);
+    cmd.args(["auth", "preflight", "--json"]);
+
+    let assert = cmd.assert().success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+    let payload: Value = serde_json::from_str(&stdout).expect("json stdout");
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["result"]["authenticated"], true);
+    assert_eq!(payload["result"]["needs_login"], false);
+    assert_eq!(payload["result"]["needs_refresh"], false);
+    assert_eq!(payload["result"]["email"], "user@example.com");
+
+    login_params.assert_hits(1);
+    login.assert_hits(1);
+}
+
+#[test]
 fn auth_logout_remote_failure_still_removes_local_session() {
     let server = MockServer::start();
     let workspace = temp_workspace();
@@ -370,71 +441,7 @@ fn auth_logout_remote_failure_still_removes_local_session() {
 }
 
 #[test]
-fn auth_refresh_reauthenticates_when_refresh_fails_and_credentials_exist() {
-    let server = MockServer::start();
-    let workspace = temp_workspace();
-
-    let login_params = server.mock(|when, then| {
-        when.method(POST).path("/v2/login-params");
-        then.status(200).json_body(json!({
-            "identifier": "user@example.com",
-            "pw_nonce": TEST_PW_NONCE,
-            "version": "004"
-        }));
-    });
-
-    let login = server.mock(|when, then| {
-        when.method(POST).path("/v2/login");
-        then.status(200).json_body(json!({
-            "session": {
-                "access_token": "access-relogin",
-                "refresh_token": "refresh-relogin",
-                "access_expiration": 4102450000i64,
-                "refresh_expiration": 4102453600i64,
-                "readonly_access": false
-            },
-            "user": {
-                "uuid": "user-uuid",
-                "email": "user@example.com"
-            }
-        }));
-    });
-
-    let refresh = server.mock(|when, then| {
-        when.method(POST).path("/v1/sessions/refresh");
-        then.status(500).json_body(json!({
-            "message": "internal error"
-        }));
-    });
-
-    init_workspace(&workspace.path, &server.base_url());
-    let _ = run_auth_command(
-        &workspace.path,
-        &["auth", "login", "--json"],
-        Some(("user@example.com", "password-123")),
-    );
-
-    let refresh_json = run_auth_command(
-        &workspace.path,
-        &["auth", "refresh", "--json"],
-        Some(("user@example.com", "password-123")),
-    );
-    assert_eq!(refresh_json["ok"], true);
-    assert_eq!(refresh_json["result"]["reauthenticated"], true);
-    assert!(refresh_json["result"]["refreshed_at"].is_string());
-
-    let stored = load_session_fixture(&workspace.path).expect("stored session");
-    assert_eq!(stored.session.access_token, "access-relogin");
-    assert_eq!(stored.session.refresh_token, "refresh-relogin");
-    assert!(stored.refreshed_at.is_some());
-
-    login_params.assert_hits(2);
-    login.assert_hits(2);
-    refresh.assert_hits(1);
-}
-
-#[test]
-fn auth_refresh_fails_with_clear_message_when_reauth_credentials_missing() {
+fn auth_refresh_fails_without_reauthentication_fallback() {
     let server = MockServer::start();
     let workspace = temp_workspace();
 
@@ -479,18 +486,20 @@ fn auth_refresh_fails_with_clear_message_when_reauth_credentials_missing() {
     );
 
     let mut cmd = base_command(&workspace.path);
-    cmd.args(["auth", "refresh", "--json"]);
+    cmd.args(["auth", "refresh", "--json"])
+        .env("SN_EMAIL", "user@example.com")
+        .env("SN_PASSWORD", "password-123");
 
-    let assert = cmd.assert().code(3);
+    let assert = cmd.assert().code(4);
     let stderr = String::from_utf8_lossy(&assert.get_output().stderr).to_string();
     let payload: Value = serde_json::from_str(&stderr).expect("json stderr");
     assert_eq!(payload["ok"], false);
-    assert_eq!(payload["error"]["kind"], "auth");
+    assert_eq!(payload["error"]["kind"], "sync");
     assert!(
         payload["error"]["message"]
             .as_str()
             .expect("error message")
-            .contains("re-auth fallback requires SN_EMAIL/SN_PASSWORD")
+            .contains("http_status=500")
     );
 
     login_params.assert_hits(1);

@@ -29,7 +29,7 @@ struct TagView {
 }
 
 pub(crate) fn cmd_tag(command: TagCommand, globals: &GlobalOptions) -> InkResult<ExitCode> {
-    with_auth_context(globals, |ctx| match command {
+    with_auth_context(globals, true, |ctx| match command {
         TagCommand::List => {
             let engine = SyncEngine::new(&ctx.api, &ctx.sessions, &ctx.profile);
             pull_with_cache_fallback(&engine)?;

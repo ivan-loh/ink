@@ -64,8 +64,8 @@ pub(crate) fn cmd_doctor(globals: &GlobalOptions) -> InkResult<ExitCode> {
         globals.server.as_deref(),
     )?;
 
-    let creds_ok = resolve_env_credentials(&paths.root)?.is_some();
     let session_store = SessionStore::from_workspace(&paths)?;
+    let creds_ok = resolve_env_credentials(&paths.root)?.is_some();
     let session_ok = if let Some(profile) = report.active_profile.as_deref() {
         session_store.load(profile)?.is_some()
     } else {

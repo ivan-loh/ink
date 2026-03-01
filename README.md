@@ -62,6 +62,25 @@ ink tag apply --note "Design note" --tag design --workspace sandbox/workspace
 ink sync push --workspace sandbox/workspace --json
 ```
 
+## Workspace Model
+
+A workspace is the local root directory that `ink` manages.
+
+- `<workspace>/.ink/config.toml`: profiles and server endpoints
+- `<workspace>/.ink/state.db`: local SQLite state (sessions, sync cache, app state)
+- `<workspace>/notes`: readable mirrored note files
+
+You can use multiple workspaces to isolate accounts, profiles, or test data.
+
+## Session Model
+
+- `ink auth login` exchanges credentials for session tokens (access + refresh) and stores them in `.ink/state.db`.
+- `ink auth status` checks auth state and auto-refreshes close-to-expiry sessions.
+- `ink auth refresh` forces refresh; if refresh fails, run `ink auth login` again.
+- Session-backed commands (`sync`, `note`, `tag`) automatically refresh near-expiry sessions before running.
+
+Standard Notes login payloads include an `ephemeral` flag; `ink` currently uses `ephemeral: false` (persistent session behavior).
+
 ## Core Commands
 
 - Health and setup:
@@ -77,6 +96,7 @@ ink profile use <profile> --workspace <path>
 
 ```bash
 ink auth login --workspace <path>
+ink auth preflight --workspace <path> --json
 ink auth status --workspace <path>
 ink auth refresh --workspace <path>
 ink auth logout --workspace <path>
@@ -98,11 +118,15 @@ ink sync reset --yes --workspace <path>
 
 ```bash
 ink note list --workspace <path>
+ink note list --fields uuid,title,updated_at --limit 50 --cursor 0 --workspace <path> --json
+ink note resolve "<title-or-query>" --workspace <path> --json
 ink note get <selector> --workspace <path>
 ink note new --title "Title" --text "Body" --workspace <path>
+ink note upsert --title "Title" --text "Body" --workspace <path>
+printf "Long body" | ink note upsert --title "Title" --text - --append --workspace <path>
 ink note edit <selector> --text "Updated body" --workspace <path>
 ink note delete <selector> --yes --workspace <path>
-ink note search --query "keyword" --workspace <path>
+ink note search --query "keyword" --fields uuid,title --limit 25 --workspace <path> --json
 ```
 
 - Tags:
@@ -125,6 +149,7 @@ ink tag apply --note <note-selector> --tag <tag-selector> --workspace <path>
 ## Automation
 
 Use `--json` for machine-readable output and stable error handling.
+`--json` responses include `contract_version` and `meta.timestamp` for contract-aware automation.
 
 Exit codes:
 

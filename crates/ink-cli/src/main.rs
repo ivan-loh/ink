@@ -1,6 +1,7 @@
 mod commands;
 mod mirror;
 
+use chrono::Utc;
 use clap::{Parser, Subcommand, ValueEnum};
 use ink_api::StandardNotesApi;
 use ink_core::{ExitCode, InkError, InkResult};
@@ -91,6 +92,7 @@ enum AuthCommand {
     Status,
     Logout,
     Refresh,
+    Preflight,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -118,6 +120,17 @@ enum NoteCommand {
     List {
         #[arg(long)]
         tag: Option<String>,
+        #[arg(long)]
+        fields: Option<String>,
+        #[arg(long)]
+        limit: Option<usize>,
+        #[arg(long)]
+        cursor: Option<String>,
+    },
+    Resolve {
+        selector: String,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
     },
     Get {
         selector: String,
@@ -129,6 +142,18 @@ enum NoteCommand {
         text: Option<String>,
         #[arg(long)]
         file: Option<PathBuf>,
+        #[arg(long)]
+        tag: Option<String>,
+    },
+    Upsert {
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        text: Option<String>,
+        #[arg(long)]
+        file: Option<PathBuf>,
+        #[arg(long)]
+        append: bool,
         #[arg(long)]
         tag: Option<String>,
     },
@@ -155,6 +180,10 @@ enum NoteCommand {
         tag: Option<String>,
         #[arg(long)]
         limit: Option<usize>,
+        #[arg(long)]
+        cursor: Option<String>,
+        #[arg(long)]
+        fields: Option<String>,
         #[arg(long)]
         offline: bool,
     },
@@ -292,7 +321,11 @@ fn run_command(command: Command, globals: &GlobalOptions) -> InkResult<ExitCode>
     }
 }
 
-fn with_auth_context<F>(globals: &GlobalOptions, run: F) -> InkResult<ExitCode>
+fn with_auth_context<F>(
+    globals: &GlobalOptions,
+    auto_refresh_session: bool,
+    run: F,
+) -> InkResult<ExitCode>
 where
     F: FnOnce(AuthContext) -> InkResult<ExitCode>,
 {
@@ -311,13 +344,19 @@ where
     let api = StandardNotesApi::new(&resolved.server)?;
     let sessions = SessionStore::from_workspace(&paths)?;
 
-    run(AuthContext {
+    let ctx = AuthContext {
         paths,
         profile: resolved.name,
         server: resolved.server,
         api,
         sessions,
-    })
+    };
+
+    if auto_refresh_session {
+        refresh_session_if_needed(&ctx)?;
+    }
+
+    run(ctx)
 }
 
 fn normalize_unix_timestamp_seconds(value: i64) -> i64 {
@@ -326,6 +365,44 @@ fn normalize_unix_timestamp_seconds(value: i64) -> i64 {
     } else {
         value
     }
+}
+
+fn refresh_session_if_needed(ctx: &AuthContext) -> InkResult<()> {
+    let Some(mut stored) = ctx.sessions.load(&ctx.profile)? else {
+        return Ok(());
+    };
+
+    let now = Utc::now().timestamp();
+    let access_expiration = normalize_unix_timestamp_seconds(stored.session.access_expiration);
+    if access_expiration > now + 60 {
+        return Ok(());
+    }
+
+    let refresh_response = ctx.api.refresh_session(
+        &stored.session.access_token,
+        &stored.session.refresh_token,
+        stored.refresh_token_cookie.as_deref(),
+    )?;
+    let refreshed_session = refresh_response.session.ok_or_else(|| {
+        InkError::auth("session refresh response did not include updated session payload")
+    })?;
+
+    stored.session = refreshed_session;
+    if refresh_response.access_token_cookie.is_some() {
+        stored.access_token_cookie = refresh_response.access_token_cookie;
+    }
+    if refresh_response.refresh_token_cookie.is_some() {
+        stored.refresh_token_cookie = refresh_response.refresh_token_cookie;
+    }
+    stored.refreshed_at = Some(Utc::now().to_rfc3339());
+    ctx.sessions.save(&ctx.profile, &stored)?;
+
+    let mut state = ctx.sessions.load_app_state(&ctx.profile)?;
+    state.mark_auth_ok();
+    state.last_sync_status = Some("session refreshed".to_string());
+    ctx.sessions.save_app_state(&ctx.profile, &state)?;
+
+    Ok(())
 }
 
 fn workspace_target(globals: &GlobalOptions) -> InkResult<PathBuf> {
@@ -384,11 +461,21 @@ pub(crate) fn is_uuid(input: &str) -> bool {
 
 fn render_error(error: &InkError, json_output: bool) {
     if json_output {
+        let retry_after_sec = parse_marker_u64(&error.message, "[retry_after_seconds=");
+        let machine = machine_error_details(error);
         let payload = json!({
             "ok": false,
+            "contract_version": "v1",
+            "meta": {
+                "timestamp": Utc::now().to_rfc3339(),
+            },
             "error": {
                 "kind": error.kind,
+                "code": machine.code,
                 "message": &error.message,
+                "retryable": machine.retryable,
+                "retry_after_sec": retry_after_sec,
+                "hint": machine.hint,
             }
         });
         let serialized = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| {
@@ -401,8 +488,143 @@ fn render_error(error: &InkError, json_output: bool) {
 }
 
 fn print_json<T: Serialize>(value: &T) -> InkResult<()> {
-    let rendered = serde_json::to_string_pretty(value)
+    let mut payload = serde_json::to_value(value)
+        .map_err(|err| InkError::io(format!("failed to encode JSON output payload: {err}")))?;
+
+    if let Some(map) = payload.as_object_mut()
+        && map.contains_key("ok")
+    {
+        map.entry("contract_version".to_string())
+            .or_insert_with(|| json!("v1"));
+        let meta = map.entry("meta".to_string()).or_insert_with(|| json!({}));
+        if let Some(meta_map) = meta.as_object_mut() {
+            meta_map
+                .entry("timestamp".to_string())
+                .or_insert_with(|| json!(Utc::now().to_rfc3339()));
+        }
+    }
+
+    let rendered = serde_json::to_string_pretty(&payload)
         .map_err(|err| InkError::io(format!("failed to render JSON output: {err}")))?;
     println!("{rendered}");
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MachineErrorDetails {
+    code: &'static str,
+    retryable: bool,
+    hint: &'static str,
+}
+
+fn machine_error_details(error: &InkError) -> MachineErrorDetails {
+    let status = parse_marker_u64(&error.message, "[http_status=");
+    match error.kind {
+        ink_core::ErrorKind::Usage => {
+            if error.message.contains("multiple notes matched")
+                || error.message.contains("multiple tags matched")
+            {
+                MachineErrorDetails {
+                    code: "USAGE_SELECTOR_AMBIGUOUS",
+                    retryable: false,
+                    hint: "Use UUID selector instead of title.",
+                }
+            } else if error.message.contains("no note found")
+                || error.message.contains("no tag found")
+            {
+                MachineErrorDetails {
+                    code: "USAGE_SELECTOR_NOT_FOUND",
+                    retryable: false,
+                    hint: "Run list command first and select by UUID.",
+                }
+            } else {
+                MachineErrorDetails {
+                    code: "USAGE_INVALID_INPUT",
+                    retryable: false,
+                    hint: "Check command flags and required arguments.",
+                }
+            }
+        }
+        ink_core::ErrorKind::Auth => {
+            if error.message.contains("missing credentials") {
+                MachineErrorDetails {
+                    code: "AUTH_MISSING_CREDENTIALS",
+                    retryable: false,
+                    hint: "Set SN_EMAIL and SN_PASSWORD in environment or .env.",
+                }
+            } else if error.message.contains("no active session") {
+                MachineErrorDetails {
+                    code: "AUTH_NO_ACTIVE_SESSION",
+                    retryable: false,
+                    hint: "Run `ink auth login` first.",
+                }
+            } else if status == Some(401) {
+                MachineErrorDetails {
+                    code: "AUTH_UNAUTHORIZED",
+                    retryable: false,
+                    hint: "Re-authenticate with `ink auth login`.",
+                }
+            } else {
+                MachineErrorDetails {
+                    code: "AUTH_ERROR",
+                    retryable: false,
+                    hint: "Check authentication state with `ink auth status --json`.",
+                }
+            }
+        }
+        ink_core::ErrorKind::Sync => {
+            if status == Some(429) {
+                MachineErrorDetails {
+                    code: "SYNC_RATE_LIMITED",
+                    retryable: true,
+                    hint: "Retry after `retry_after_sec` when present.",
+                }
+            } else if matches!(status, Some(code) if code >= 500) {
+                MachineErrorDetails {
+                    code: "SYNC_SERVER_ERROR",
+                    retryable: true,
+                    hint: "Retry with backoff.",
+                }
+            } else if error.message.contains("conflict") || error.message.contains("conflicts") {
+                MachineErrorDetails {
+                    code: "SYNC_CONFLICT",
+                    retryable: false,
+                    hint: "Inspect and resolve with `ink sync conflicts` / `ink sync resolve`.",
+                }
+            } else {
+                MachineErrorDetails {
+                    code: "SYNC_ERROR",
+                    retryable: true,
+                    hint: "Retry or run `ink sync status --json` for state details.",
+                }
+            }
+        }
+        ink_core::ErrorKind::Crypto => MachineErrorDetails {
+            code: "CRYPTO_ERROR",
+            retryable: false,
+            hint: "Verify account credentials and key params, then re-login.",
+        },
+        ink_core::ErrorKind::Io => {
+            if error.message.contains("state database") && error.message.contains("corrupted") {
+                MachineErrorDetails {
+                    code: "IO_STATE_DB_CORRUPT",
+                    retryable: false,
+                    hint: "Remove .ink/state.db and run `ink sync pull` to rebuild local state.",
+                }
+            } else {
+                MachineErrorDetails {
+                    code: "IO_ERROR",
+                    retryable: false,
+                    hint: "Check filesystem permissions and workspace path.",
+                }
+            }
+        }
+    }
+}
+
+fn parse_marker_u64(message: &str, marker: &str) -> Option<u64> {
+    let start = message.find(marker)? + marker.len();
+    let tail = &message[start..];
+    let end = tail.find(']')?;
+    tail[..end].parse::<u64>().ok()
 }

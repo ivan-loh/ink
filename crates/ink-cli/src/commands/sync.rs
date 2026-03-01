@@ -17,7 +17,7 @@ use crate::{
 };
 
 pub(crate) fn cmd_sync(command: SyncCommand, globals: &GlobalOptions) -> InkResult<ExitCode> {
-    with_auth_context(globals, |ctx| match command {
+    with_auth_context(globals, true, |ctx| match command {
         SyncCommand::Pull => {
             let summary = native_pull(&ctx, true)?;
             if globals.json {
@@ -319,7 +319,7 @@ fn native_push(
             .and_then(|uuid| find_entry_by_uuid(&index, uuid));
 
         let changed = match tracked_entry {
-            Some(entry) => entry.sha256 != local_note.sha256,
+            Some(entry) => entry.sha256 != local_note.sha256 || entry.title != local_note.title,
             None => true,
         };
 

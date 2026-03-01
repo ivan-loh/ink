@@ -347,11 +347,27 @@ fn phase4_usage_errors_require_yes() {
 
     init_workspace(&workspace.path, &server.base_url());
 
-    let note_err = run_command_fail(&workspace.path, &["note", "delete", "anything", "--json"]);
-    assert!(note_err.contains("note delete requires --yes"));
+    let note_err =
+        run_command_fail_json(&workspace.path, &["note", "delete", "anything", "--json"]);
+    assert_eq!(note_err["ok"], false);
+    assert_eq!(note_err["contract_version"], "v1");
+    assert_eq!(note_err["error"]["code"], "USAGE_INVALID_INPUT");
+    assert!(
+        note_err["error"]["message"]
+            .as_str()
+            .expect("error message")
+            .contains("note delete requires --yes")
+    );
 
-    let tag_err = run_command_fail(&workspace.path, &["tag", "delete", "anything", "--json"]);
-    assert!(tag_err.contains("tag delete requires --yes"));
+    let tag_err = run_command_fail_json(&workspace.path, &["tag", "delete", "anything", "--json"]);
+    assert_eq!(tag_err["ok"], false);
+    assert_eq!(tag_err["error"]["code"], "USAGE_INVALID_INPUT");
+    assert!(
+        tag_err["error"]["message"]
+            .as_str()
+            .expect("error message")
+            .contains("tag delete requires --yes")
+    );
 }
 
 #[test]
@@ -424,6 +440,124 @@ fn phase4_conflict_from_push_fails_command() {
         ],
     );
     assert!(err.contains("server reported 1 conflicts"));
+}
+
+#[test]
+fn phase4_llm_operability_resolve_upsert_and_paging() {
+    let server = MockServer::start();
+    let workspace = temp_workspace();
+    let fixtures = Fixtures::new();
+
+    init_workspace(&workspace.path, &server.base_url());
+    seed_session(&workspace.path, &server.base_url(), &fixtures.master_key);
+
+    let mut retrieved = fixtures.default_retrieved_items();
+    retrieved.push(fixtures.note_item(
+        "77777777-7777-4777-8777-777777777777",
+        "Fixture Secondary",
+        "Secondary Fixture Body",
+        1772237100000000,
+    ));
+
+    let _pull = mock_pull_with_retrieved(&server, retrieved);
+    let push = mock_push(&server);
+
+    let resolve_exact = run_command(
+        &workspace.path,
+        &["note", "resolve", &fixtures.note_title, "--json"],
+    );
+    assert_eq!(resolve_exact["ok"], true);
+    assert_eq!(resolve_exact["result"]["resolved_uuid"], fixtures.note_uuid);
+    assert_eq!(resolve_exact["result"]["exact_matches"], 1);
+
+    let resolve_partial = run_command(
+        &workspace.path,
+        &["note", "resolve", "Fixture", "--limit", "1", "--json"],
+    );
+    assert_eq!(resolve_partial["ok"], true);
+    assert_eq!(resolve_partial["result"]["resolved_uuid"], Value::Null);
+    assert_eq!(resolve_partial["result"]["returned"], 1);
+
+    let list_page_1 = run_command(
+        &workspace.path,
+        &[
+            "note",
+            "list",
+            "--fields",
+            "uuid,title",
+            "--limit",
+            "1",
+            "--json",
+        ],
+    );
+    assert_eq!(list_page_1["ok"], true);
+    assert_eq!(list_page_1["page"]["returned"], 1);
+    assert_eq!(list_page_1["page"]["next_cursor"], "1");
+    assert!(list_page_1["result"][0]["content"].is_null());
+    let cursor = list_page_1["page"]["next_cursor"]
+        .as_str()
+        .expect("next cursor")
+        .to_string();
+
+    let list_page_2 = run_command(
+        &workspace.path,
+        &[
+            "note",
+            "list",
+            "--fields",
+            "uuid,title",
+            "--limit",
+            "1",
+            "--cursor",
+            &cursor,
+            "--json",
+        ],
+    );
+    assert_eq!(list_page_2["ok"], true);
+    assert_eq!(list_page_2["page"]["returned"], 1);
+
+    let updated = run_command_with_stdin(
+        &workspace.path,
+        &[
+            "note",
+            "upsert",
+            "--title",
+            &fixtures.note_title,
+            "--text",
+            "-",
+            "--append",
+            "--json",
+        ],
+        "From stdin",
+    );
+    assert_eq!(updated["ok"], true);
+    assert_eq!(updated["result"]["action"], "updated");
+    assert_eq!(updated["result"]["uuid"], fixtures.note_uuid);
+
+    let noop = run_command(
+        &workspace.path,
+        &["note", "upsert", "--title", &fixtures.note_title, "--json"],
+    );
+    assert_eq!(noop["ok"], true);
+    assert_eq!(noop["result"]["action"], "noop");
+
+    let created = run_command(
+        &workspace.path,
+        &[
+            "note",
+            "upsert",
+            "--title",
+            "LLM New Note",
+            "--text",
+            "Created by upsert",
+            "--json",
+        ],
+    );
+    assert_eq!(created["ok"], true);
+    assert_eq!(created["result"]["action"], "created");
+    assert_eq!(created["result"]["title"], "LLM New Note");
+
+    push.assert_hits(2);
 }
 
 #[derive(Debug, Clone)]
@@ -688,6 +822,22 @@ fn run_command_fail(workspace: &Path, args: &[&str]) -> String {
     cmd.args(args);
     let assert = cmd.assert().failure();
     String::from_utf8_lossy(&assert.get_output().stderr).to_string()
+}
+
+fn run_command_fail_json(workspace: &Path, args: &[&str]) -> Value {
+    let mut cmd = base_command(workspace);
+    cmd.args(args);
+    let assert = cmd.assert().failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).to_string();
+    serde_json::from_str(&stderr).expect("json stderr")
+}
+
+fn run_command_with_stdin(workspace: &Path, args: &[&str], stdin: &str) -> Value {
+    let mut cmd = base_command(workspace);
+    cmd.args(args).write_stdin(stdin);
+    let assert = cmd.assert().success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+    serde_json::from_str(&stdout).expect("json stdout")
 }
 
 fn base_command(workspace: &Path) -> Command {

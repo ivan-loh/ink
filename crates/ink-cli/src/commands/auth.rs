@@ -11,7 +11,7 @@ use crate::{
 };
 
 pub(crate) fn cmd_auth(command: AuthCommand, globals: &GlobalOptions) -> InkResult<ExitCode> {
-    with_auth_context(globals, |ctx| match command {
+    with_auth_context(globals, false, |ctx| match command {
         AuthCommand::Login => {
             let credentials = resolve_env_credentials(&ctx.paths.root)?.ok_or_else(|| {
                 InkError::auth(
@@ -186,48 +186,25 @@ pub(crate) fn cmd_auth(command: AuthCommand, globals: &GlobalOptions) -> InkResu
                 ))
             })?;
 
-            let (updated, reauthenticated) = match ctx.api.refresh_session(
+            let refresh_response = ctx.api.refresh_session(
                 &stored.session.access_token,
                 &stored.session.refresh_token,
                 stored.refresh_token_cookie.as_deref(),
-            ) {
-                Ok(refresh_response) => {
-                    let refreshed = refresh_response.session.ok_or_else(|| {
-                        InkError::auth("session refresh response did not include session payload")
-                    })?;
+            )?;
+            let refreshed = refresh_response.session.ok_or_else(|| {
+                InkError::auth("session refresh response did not include session payload")
+            })?;
 
-                    let updated = ctx.sessions.mark_refreshed(
-                        &ctx.profile,
-                        refreshed,
-                        refresh_response.access_token_cookie,
-                        refresh_response.refresh_token_cookie,
-                    )?;
-                    (updated, false)
-                }
-                Err(refresh_error) => {
-                    let credentials =
-                        resolve_env_credentials(&ctx.paths.root)?.ok_or_else(|| {
-                            InkError::auth(format!(
-                                "{}; re-auth fallback requires SN_EMAIL/SN_PASSWORD",
-                                refresh_error.message
-                            ))
-                        })?;
-
-                    let mut relogin =
-                        login_with_email_password(&ctx, &credentials.email, &credentials.password)?;
-                    relogin.refreshed_at = Some(Utc::now().to_rfc3339());
-                    ctx.sessions.save(&ctx.profile, &relogin)?;
-                    (relogin, true)
-                }
-            };
+            let updated = ctx.sessions.mark_refreshed(
+                &ctx.profile,
+                refreshed,
+                refresh_response.access_token_cookie,
+                refresh_response.refresh_token_cookie,
+            )?;
 
             let mut state = ctx.sessions.load_app_state(&ctx.profile)?;
             state.mark_auth_ok();
-            state.last_sync_status = Some(if reauthenticated {
-                "session re-authenticated".to_string()
-            } else {
-                "session refreshed".to_string()
-            });
+            state.last_sync_status = Some("session refreshed".to_string());
             ctx.sessions.save_app_state(&ctx.profile, &state)?;
 
             if globals.json {
@@ -241,17 +218,72 @@ pub(crate) fn cmd_auth(command: AuthCommand, globals: &GlobalOptions) -> InkResu
                         "access_expiration": updated.session.access_expiration,
                         "refresh_expiration": updated.session.refresh_expiration,
                         "refreshed_at": updated.refreshed_at,
-                        "reauthenticated": reauthenticated,
+                        "reauthenticated": false,
                     }
                 }))?;
             } else {
-                if reauthenticated {
-                    println!("Session re-authenticated for profile '{}'.", ctx.profile);
-                } else {
-                    println!("Session refreshed for profile '{}'.", ctx.profile);
-                }
+                println!("Session refreshed for profile '{}'.", ctx.profile);
                 println!("Access expiration: {}", updated.session.access_expiration);
                 println!("Refresh expiration: {}", updated.session.refresh_expiration);
+            }
+
+            Ok(ExitCode::Success)
+        }
+        AuthCommand::Preflight => {
+            let stored = ctx.sessions.load(&ctx.profile)?;
+            let env_credentials_available = resolve_env_credentials(&ctx.paths.root)?.is_some();
+
+            let (authenticated, email, access_expiration, refresh_expiration, needs_refresh) =
+                if let Some(stored) = stored {
+                    let now = Utc::now().timestamp();
+                    let access_expiration =
+                        normalize_unix_timestamp_seconds(stored.session.access_expiration);
+                    (
+                        true,
+                        Some(stored.email),
+                        Some(stored.session.access_expiration),
+                        Some(stored.session.refresh_expiration),
+                        access_expiration <= now + 60,
+                    )
+                } else {
+                    (false, None, None, None, false)
+                };
+
+            if globals.json {
+                print_json(&json!({
+                    "ok": true,
+                    "result": {
+                        "profile": ctx.profile,
+                        "server": ctx.server,
+                        "authenticated": authenticated,
+                        "needs_login": !authenticated,
+                        "needs_refresh": needs_refresh,
+                        "email": email,
+                        "access_expiration": access_expiration,
+                        "refresh_expiration": refresh_expiration,
+                        "env_credentials_available": env_credentials_available,
+                    }
+                }))?;
+            } else {
+                println!("Server: {}", ctx.server);
+                println!("Profile: {}", ctx.profile);
+                println!(
+                    "Authenticated: {}",
+                    if authenticated { "yes" } else { "no" }
+                );
+                println!("Needs login: {}", if authenticated { "no" } else { "yes" });
+                println!(
+                    "Needs refresh: {}",
+                    if needs_refresh { "yes" } else { "no" }
+                );
+                println!(
+                    "Env credentials available: {}",
+                    if env_credentials_available {
+                        "yes"
+                    } else {
+                        "no"
+                    }
+                );
             }
 
             Ok(ExitCode::Success)
