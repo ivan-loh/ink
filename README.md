@@ -73,17 +73,21 @@ A workspace is the local root directory that `ink` manages.
 - `<workspace>/.ink/mirror-index.json`: mirror index for the `default` profile
 - `<workspace>/.ink/mirror-index-<profile-key>.json`: mirror index for non-default profiles
 
-You can use multiple workspaces to isolate accounts, profiles, or test data.
+`ink` enforces single-profile workspaces (`default` only).
+Use one dedicated workspace per account/server.
+Non-default profile usage (`--profile <non-default>`, `profile use <non-default>`, `profile set --name <non-default>`) returns a usage error.
 
 ## Session Model
 
 - `ink auth login` exchanges credentials for session tokens (access + refresh) and stores them in `.ink/state.db`.
 - Profiles are account-bound after login; switching to a different email on the same profile requires `ink --yes auth login --rebind-account`.
+- Rebind is two-phase: credentials are validated first, then runtime cache/mirror cleanup is attempted; login still succeeds if cleanup partially fails, and warnings include recovery guidance.
 - `ink auth status` checks auth state and auto-refreshes close-to-expiry sessions.
-- `ink auth refresh` forces refresh; if refresh fails, run `ink auth login` again.
+- `ink auth refresh` forces refresh; if refresh fails, the failure is recorded in stored session transport diagnostics (`refresh_transport_last_error`) and re-login may be required.
 - Session-backed commands (`sync`, `note`, `tag`) automatically refresh near-expiry sessions before running.
 - Refresh transport compatibility is persisted per profile (`token_body` or `dual_cookie_token_body`) with one-step fallback on contract mismatch.
 - Refresh retries transient network/server failures with bounded backoff.
+- `ink profile set --server` updates endpoint routing for the default profile without clearing bound email.
 
 Standard Notes login payloads include an `ephemeral` flag; `ink` currently uses `ephemeral: false` (persistent session behavior).
 
@@ -94,8 +98,7 @@ Standard Notes login payloads include an `ephemeral` flag; `ink` currently uses 
 ```bash
 ink doctor --workspace <path>
 ink profile list --workspace <path>
-ink profile set --name <profile> --server <url> --workspace <path>
-ink profile use <profile> --workspace <path>
+ink profile set --server <url> --workspace <path>
 ```
 
 - Authentication:
@@ -150,6 +153,7 @@ ink tag apply --note <note-selector> --tag <tag-selector> --workspace <path>
 ## Operational Notes
 
 - Global flags: `--workspace`, `--profile`, `--server`, `--json`, `--yes`.
+- `--profile` may be omitted or set to `default`; non-default profile names are rejected.
 - If `--workspace` is omitted, the default is `sandbox/workspace`.
 - Local state is stored in `.ink/state.db` (SQLite).
 - Mirrored note files are profile-scoped:
@@ -162,6 +166,7 @@ ink tag apply --note <note-selector> --tag <tag-selector> --workspace <path>
 - Set `INK_API_REFRESH_FALLBACK=0` to disable refresh-mode fallback when doing strict transport diagnostics.
 - Set `INK_API_REFRESH_RETRY_ATTEMPTS=<n>` to control transient refresh retry count (default `2`, max `6`).
 - Set `INK_API_REFRESH_RETRY_BASE_DELAY_MS=<ms>` to control base retry delay (default `100`, max `10000`).
+- `ink auth login --rebind-account --json` includes `result.warning` when rebind cleanup had partial local failures.
 
 ## Automation
 
@@ -183,6 +188,10 @@ If local workspace state is corrupted:
 
 1. Remove `<workspace>/.ink/state.db`.
 2. Run `ink sync pull --workspace <path>` to rebuild local cache/state.
+
+If rebind login succeeds with a cleanup warning:
+
+1. Run `ink sync reset --yes --workspace <path>` to rebuild runtime cache/mirror for that profile.
 
 ## Release
 

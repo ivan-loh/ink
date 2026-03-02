@@ -68,6 +68,44 @@ pub struct SyncEngine<'a> {
     max_retries: u32,
 }
 
+pub fn refresh_stored_session(
+    api: &StandardNotesApi,
+    store: &SessionStore,
+    profile: &str,
+    stored: &StoredSession,
+) -> InkResult<StoredSession> {
+    let refresh_request =
+        RefreshSessionRequest::new(&stored.session.access_token, &stored.session.refresh_token)
+            .with_access_token_cookie(stored.access_token_cookie.as_deref())
+            .with_refresh_token_cookie(stored.refresh_token_cookie.as_deref())
+            .with_preferred_mode(stored.refresh_transport_mode);
+    let refresh_response = match api.refresh_session(&refresh_request) {
+        Ok(response) => response,
+        Err(error) => {
+            let _ = store.mark_refresh_failed(profile, error.message.as_str());
+            return Err(error);
+        }
+    };
+
+    let refreshed_session = match refresh_response.session {
+        Some(session) => session,
+        None => {
+            let error =
+                InkError::auth("session refresh response did not include updated session payload");
+            let _ = store.mark_refresh_failed(profile, error.message.as_str());
+            return Err(error);
+        }
+    };
+
+    store.mark_refreshed(
+        profile,
+        refreshed_session,
+        refresh_response.access_token_cookie,
+        refresh_response.refresh_token_cookie,
+        refresh_response.mode_used,
+    )
+}
+
 impl<'a> SyncEngine<'a> {
     pub fn new(
         api: &'a StandardNotesApi,
@@ -512,28 +550,8 @@ impl<'a> SyncEngine<'a> {
                 Err(error) => {
                     if error.kind == ErrorKind::Auth && !refreshed {
                         refreshed = true;
-                        let refresh_request = RefreshSessionRequest::new(
-                            &session.session.access_token,
-                            &session.session.refresh_token,
-                        )
-                        .with_access_token_cookie(session.access_token_cookie.as_deref())
-                        .with_refresh_token_cookie(session.refresh_token_cookie.as_deref())
-                        .with_preferred_mode(session.refresh_transport_mode);
-                        let refresh = self.api.refresh_session(&refresh_request)?;
-
-                        let refreshed_session = refresh.session.ok_or_else(|| {
-                            InkError::auth(
-                                "session refresh response did not include updated session payload",
-                            )
-                        })?;
-
-                        let updated = self.store.mark_refreshed(
-                            &self.profile,
-                            refreshed_session,
-                            refresh.access_token_cookie,
-                            refresh.refresh_token_cookie,
-                            refresh.mode_used,
-                        )?;
+                        let updated =
+                            refresh_stored_session(self.api, self.store, &self.profile, session)?;
                         *session = updated;
                         continue;
                     }

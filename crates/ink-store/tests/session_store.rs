@@ -134,6 +134,53 @@ fn mark_refreshed_updates_tokens_and_timestamp() {
 }
 
 #[test]
+fn mark_refresh_failed_persists_transport_error_until_next_successful_refresh() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("workspace");
+    let init =
+        init_workspace(Some(&root), Some("https://api.example.com")).expect("init workspace");
+
+    let store = SessionStore::from_workspace(&init.paths).expect("session store");
+    let stored = StoredSession {
+        profile: "default".to_string(),
+        server: "https://api.example.com".to_string(),
+        email: "user@example.com".to_string(),
+        authenticated_at: "2026-02-28T00:00:00Z".to_string(),
+        refreshed_at: None,
+        refresh_transport_mode: None,
+        refresh_transport_confirmed_at: None,
+        refresh_transport_last_error: None,
+        master_key: Some("master-old".to_string()),
+        session: fixture_session("access-old", "refresh-old"),
+        access_token_cookie: None,
+        refresh_token_cookie: None,
+        user: None,
+        key_params: None,
+    };
+    store.save("default", &stored).expect("save");
+
+    store
+        .mark_refresh_failed("default", "refresh failed [http_status=500]")
+        .expect("record refresh failure");
+    let failed = store.load("default").expect("load").expect("session");
+    assert_eq!(
+        failed.refresh_transport_last_error.as_deref(),
+        Some("refresh failed [http_status=500]")
+    );
+
+    let recovered = store
+        .mark_refreshed(
+            "default",
+            fixture_session("access-new", "refresh-new"),
+            None,
+            None,
+            Some(RefreshTransportMode::TokenBody),
+        )
+        .expect("refresh");
+    assert!(recovered.refresh_transport_last_error.is_none());
+}
+
+#[test]
 fn sync_state_round_trip_and_cache_clear() {
     let temp = tempfile::tempdir().expect("tempdir");
     let root = temp.path().join("workspace");
@@ -185,6 +232,88 @@ fn sync_state_round_trip_and_cache_clear() {
         .expect("load reset items");
     assert!(reset_state.sync_token.is_none());
     assert!(reset_items.is_empty());
+}
+
+#[test]
+fn clear_profile_runtime_state_keeps_session_but_resets_sync_and_app_state() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("workspace");
+    let init =
+        init_workspace(Some(&root), Some("https://api.example.com")).expect("init workspace");
+
+    let store = SessionStore::from_workspace(&init.paths).expect("session store");
+    let stored = StoredSession {
+        profile: "default".to_string(),
+        server: "https://api.example.com".to_string(),
+        email: "user@example.com".to_string(),
+        authenticated_at: "2026-02-28T00:00:00Z".to_string(),
+        refreshed_at: None,
+        refresh_transport_mode: None,
+        refresh_transport_confirmed_at: None,
+        refresh_transport_last_error: None,
+        master_key: Some("master-1".to_string()),
+        session: fixture_session("access-1", "refresh-1"),
+        access_token_cookie: None,
+        refresh_token_cookie: None,
+        user: None,
+        key_params: None,
+    };
+    store.save("default", &stored).expect("save");
+    store
+        .save_sync_state(
+            "default",
+            &SyncState {
+                sync_token: Some("sync-1".to_string()),
+                cursor_token: Some("cursor-1".to_string()),
+                last_pulled_at: Some("2026-02-28T00:00:00Z".to_string()),
+                last_pushed_at: None,
+                last_error: None,
+                item_count: 1,
+            },
+        )
+        .expect("save sync state");
+    store
+        .save_cached_items(
+            "default",
+            &[SyncItem {
+                uuid: "note-1".to_string(),
+                content_type: "Note".to_string(),
+                content: "004:payload".to_string(),
+                enc_item_key: "004:key".to_string(),
+                items_key_id: Some("items-key-1".to_string()),
+                deleted: false,
+                ..SyncItem::default()
+            }],
+        )
+        .expect("save cached items");
+    store
+        .save_app_state(
+            "default",
+            &AppState {
+                last_sync_status: Some("ok".to_string()),
+                ..AppState::default()
+            },
+        )
+        .expect("save app state");
+
+    store
+        .clear_profile_runtime_state("default")
+        .expect("clear runtime state");
+
+    let session = store
+        .load("default")
+        .expect("load")
+        .expect("session remains");
+    assert_eq!(session.email, "user@example.com");
+
+    let sync_state = store.load_sync_state("default").expect("load sync state");
+    assert!(sync_state.sync_token.is_none());
+    let items = store
+        .load_cached_items("default")
+        .expect("load cached items after clear");
+    assert!(items.is_empty());
+    let app_state = store.load_app_state("default").expect("load app state");
+    assert!(app_state.last_sync_status.is_none());
 }
 
 #[test]

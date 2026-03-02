@@ -218,6 +218,16 @@ impl SessionStore {
         Ok(current)
     }
 
+    pub fn mark_refresh_failed(&self, profile: &str, error_message: &str) -> InkResult<()> {
+        let mut current = self.load(profile)?.ok_or_else(|| {
+            InkError::auth(format!(
+                "no active session for profile '{profile}'; run `ink auth login` first"
+            ))
+        })?;
+        current.refresh_transport_last_error = Some(error_message.to_string());
+        self.save(profile, &current)
+    }
+
     pub fn load_sync_state(&self, profile: &str) -> InkResult<SyncState> {
         let key = profile_key(profile);
         let conn = self.connection()?;
@@ -326,17 +336,56 @@ impl SessionStore {
         Ok(())
     }
 
+    pub fn clear_profile_runtime_state(&self, profile: &str) -> InkResult<()> {
+        let key = profile_key(profile);
+        let mut conn = self.connection()?;
+        let transaction = conn.transaction().map_err(|err| {
+            sqlite_error(
+                "start clear profile runtime state transaction",
+                &self.db_path,
+                err,
+            )
+        })?;
+        transaction
+            .execute("DELETE FROM sync_state WHERE profile = ?1", params![key])
+            .map_err(|err| sqlite_error("clear sync state", &self.db_path, err))?;
+        transaction
+            .execute("DELETE FROM sync_items WHERE profile = ?1", params![key])
+            .map_err(|err| sqlite_error("clear cached items", &self.db_path, err))?;
+        transaction
+            .execute("DELETE FROM app_state WHERE profile = ?1", params![key])
+            .map_err(|err| sqlite_error("clear app state", &self.db_path, err))?;
+        transaction.commit().map_err(|err| {
+            sqlite_error(
+                "commit clear profile runtime state transaction",
+                &self.db_path,
+                err,
+            )
+        })?;
+        Ok(())
+    }
+
     pub fn clear_profile_state(&self, profile: &str) -> InkResult<()> {
         let key = profile_key(profile);
-        let conn = self.connection()?;
-        conn.execute("DELETE FROM sessions WHERE profile = ?1", params![key])
+        let mut conn = self.connection()?;
+        let transaction = conn.transaction().map_err(|err| {
+            sqlite_error("start clear profile state transaction", &self.db_path, err)
+        })?;
+        transaction
+            .execute("DELETE FROM sessions WHERE profile = ?1", params![key])
             .map_err(|err| sqlite_error("clear session", &self.db_path, err))?;
-        conn.execute("DELETE FROM sync_state WHERE profile = ?1", params![key])
+        transaction
+            .execute("DELETE FROM sync_state WHERE profile = ?1", params![key])
             .map_err(|err| sqlite_error("clear sync state", &self.db_path, err))?;
-        conn.execute("DELETE FROM sync_items WHERE profile = ?1", params![key])
+        transaction
+            .execute("DELETE FROM sync_items WHERE profile = ?1", params![key])
             .map_err(|err| sqlite_error("clear cached items", &self.db_path, err))?;
-        conn.execute("DELETE FROM app_state WHERE profile = ?1", params![key])
+        transaction
+            .execute("DELETE FROM app_state WHERE profile = ?1", params![key])
             .map_err(|err| sqlite_error("clear app state", &self.db_path, err))?;
+        transaction.commit().map_err(|err| {
+            sqlite_error("commit clear profile state transaction", &self.db_path, err)
+        })?;
         Ok(())
     }
 

@@ -3,7 +3,7 @@ use httpmock::Method::POST;
 use httpmock::MockServer;
 use ink_api::SyncItem;
 use ink_crypto::derive_root_credentials_004;
-use ink_fs::{load_config, resolve_workspace};
+use ink_fs::{ProfileConfig, load_config, resolve_workspace, save_config};
 use ink_store::{AppState, SessionStore, StoredSession, SyncState};
 use serde_json::{Value, json};
 use std::fs;
@@ -75,6 +75,8 @@ fn auth_login_status_logout_round_trip() {
     );
     assert_eq!(login_json["ok"], true);
     assert_eq!(login_json["result"]["email"], "user@example.com");
+    assert!(login_json["result"].get("warning").is_some());
+    assert!(login_json["result"]["warning"].is_null());
 
     assert!(
         load_session_fixture(&workspace.path).is_some(),
@@ -229,6 +231,77 @@ fn auth_status_auto_refreshes_expiring_session() {
 }
 
 #[test]
+fn auth_status_refresh_reports_updated_last_auth_at() {
+    let server = MockServer::start();
+    let workspace = temp_workspace();
+
+    let login_params = server.mock(|when, then| {
+        when.method(POST).path("/v2/login-params");
+        then.status(200).json_body(json!({
+            "identifier": "user@example.com",
+            "pw_nonce": TEST_PW_NONCE,
+            "version": "004"
+        }));
+    });
+
+    let login = server.mock(|when, then| {
+        when.method(POST).path("/v2/login");
+        then.status(200).json_body(json!({
+            "session": {
+                "access_token": "access-expired",
+                "refresh_token": "refresh-expired",
+                "access_expiration": 1i64,
+                "refresh_expiration": 4102448400i64,
+                "readonly_access": false
+            },
+            "user": {
+                "uuid": "user-uuid",
+                "email": "user@example.com"
+            }
+        }));
+    });
+
+    let refresh = server.mock(|when, then| {
+        when.method(POST).path("/v1/sessions/refresh");
+        then.status(200).json_body(json!({
+            "session": {
+                "access_token": "access-after-status",
+                "refresh_token": "refresh-after-status",
+                "access_expiration": 4102450000i64,
+                "refresh_expiration": 4102453600i64,
+                "readonly_access": false
+            }
+        }));
+    });
+
+    init_workspace(&workspace.path, &server.base_url());
+    let _ = run_auth_command(
+        &workspace.path,
+        &["auth", "login", "--json"],
+        Some(("user@example.com", "password-123")),
+    );
+
+    let paths = resolve_workspace(Some(&workspace.path)).expect("resolve workspace");
+    let store = SessionStore::from_workspace(&paths).expect("session store");
+    store
+        .save_app_state("default", &AppState::default())
+        .expect("reset app state");
+
+    let status_json = run_auth_command(&workspace.path, &["auth", "status", "--json"], None);
+    assert_eq!(status_json["ok"], true);
+    assert_eq!(status_json["result"]["refreshed"], true);
+    assert!(
+        status_json["result"]["last_auth_at"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+
+    login_params.assert_hits(1);
+    login.assert_hits(1);
+    refresh.assert_hits(1);
+}
+
+#[test]
 fn auth_login_invalid_credentials_exits_with_auth_code() {
     let server = MockServer::start();
     let workspace = temp_workspace();
@@ -364,6 +437,161 @@ fn auth_preflight_with_session_reports_state() {
 
     login_params.assert_hits(1);
     login.assert_hits(1);
+}
+
+#[test]
+fn profile_set_server_preserves_existing_profile_binding() {
+    let server = MockServer::start();
+    let workspace = temp_workspace();
+
+    let login_params = server.mock(|when, then| {
+        when.method(POST).path("/v2/login-params");
+        then.status(200).json_body(json!({
+            "identifier": "user@example.com",
+            "pw_nonce": TEST_PW_NONCE,
+            "version": "004"
+        }));
+    });
+
+    let login = server.mock(|when, then| {
+        when.method(POST).path("/v2/login");
+        then.status(200).json_body(json!({
+            "session": {
+                "access_token": "access-login",
+                "refresh_token": "refresh-login",
+                "access_expiration": 4102444800i64,
+                "refresh_expiration": 4102448400i64,
+                "readonly_access": false
+            },
+            "user": {
+                "uuid": "user-uuid",
+                "email": "user@example.com"
+            }
+        }));
+    });
+
+    init_workspace(&workspace.path, &server.base_url());
+    let _ = run_auth_command(
+        &workspace.path,
+        &["auth", "login", "--json"],
+        Some(("user@example.com", "password-123")),
+    );
+
+    let mut cmd = base_command(&workspace.path);
+    cmd.args([
+        "profile",
+        "set",
+        "--server",
+        "https://api.next.example.com",
+        "--json",
+    ]);
+    let assert = cmd.assert().success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+    let payload: Value = serde_json::from_str(&stdout).expect("json stdout");
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["result"]["server"], "https://api.next.example.com");
+
+    let paths = resolve_workspace(Some(&workspace.path)).expect("resolve workspace");
+    let config = load_config(&paths).expect("load workspace config");
+    assert_eq!(
+        config
+            .profiles
+            .get("default")
+            .map(|profile| profile.server.as_str()),
+        Some("https://api.next.example.com")
+    );
+    assert_eq!(
+        config
+            .profiles
+            .get("default")
+            .and_then(|profile| profile.bound_email.as_deref()),
+        Some("user@example.com")
+    );
+
+    login_params.assert_hits(1);
+    login.assert_hits(1);
+}
+
+#[test]
+fn profile_set_rejects_non_default_profile_name() {
+    let server = MockServer::start();
+    let workspace = temp_workspace();
+    init_workspace(&workspace.path, &server.base_url());
+
+    let mut cmd = base_command(&workspace.path);
+    cmd.args([
+        "profile",
+        "set",
+        "--name",
+        "work",
+        "--server",
+        "https://api.next.example.com",
+        "--json",
+    ]);
+    let assert = cmd.assert().code(2);
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).to_string();
+    let payload: Value = serde_json::from_str(&stderr).expect("json stderr");
+    assert_eq!(payload["ok"], false);
+    assert_eq!(payload["error"]["kind"], "usage");
+    assert!(
+        payload["error"]["message"]
+            .as_str()
+            .expect("error message")
+            .contains("only 'default' profile")
+    );
+}
+
+#[test]
+fn auth_preflight_rejects_non_default_profile_override() {
+    let server = MockServer::start();
+    let workspace = temp_workspace();
+    init_workspace(&workspace.path, &server.base_url());
+
+    let mut cmd = base_command(&workspace.path);
+    cmd.args(["--profile", "work", "auth", "preflight", "--json"]);
+    let assert = cmd.assert().code(2);
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).to_string();
+    let payload: Value = serde_json::from_str(&stderr).expect("json stderr");
+    assert_eq!(payload["ok"], false);
+    assert_eq!(payload["error"]["kind"], "usage");
+    assert!(
+        payload["error"]["message"]
+            .as_str()
+            .expect("error message")
+            .contains("only 'default' profile")
+    );
+}
+
+#[test]
+fn auth_preflight_rejects_workspace_with_multiple_profiles() {
+    let server = MockServer::start();
+    let workspace = temp_workspace();
+    init_workspace(&workspace.path, &server.base_url());
+
+    let paths = resolve_workspace(Some(&workspace.path)).expect("resolve workspace");
+    let mut config = load_config(&paths).expect("load config");
+    config.profiles.insert(
+        "work".to_string(),
+        ProfileConfig {
+            server: "https://work.example.com".to_string(),
+            bound_email: None,
+        },
+    );
+    save_config(&paths, &config).expect("save invalid multi-profile config");
+
+    let mut cmd = base_command(&workspace.path);
+    cmd.args(["auth", "preflight", "--json"]);
+    let assert = cmd.assert().code(2);
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).to_string();
+    let payload: Value = serde_json::from_str(&stderr).expect("json stderr");
+    assert_eq!(payload["ok"], false);
+    assert_eq!(payload["error"]["kind"], "usage");
+    assert!(
+        payload["error"]["message"]
+            .as_str()
+            .expect("error message")
+            .contains("not single-profile")
+    );
 }
 
 #[test]
@@ -820,6 +1048,8 @@ fn auth_login_rebind_account_with_yes_clears_mirror_and_updates_binding() {
     );
     assert_eq!(rebind["ok"], true);
     assert_eq!(rebind["result"]["email"], "user2@example.com");
+    assert!(rebind["result"].get("warning").is_some());
+    assert!(rebind["result"]["warning"].is_null());
 
     assert!(!note_path.exists(), "stale mirror note should be cleared");
 
@@ -838,6 +1068,237 @@ fn auth_login_rebind_account_with_yes_clears_mirror_and_updates_binding() {
             .get("default")
             .and_then(|profile| profile.bound_email.as_deref()),
         Some("user2@example.com")
+    );
+
+    login_params_user1.assert_hits(1);
+    login_user1.assert_hits(1);
+    login_params_user2.assert_hits(1);
+    login_user2.assert_hits(1);
+}
+
+#[test]
+fn auth_login_rebind_cleanup_warning_is_returned_in_json_contract() {
+    let server = MockServer::start();
+    let workspace = temp_workspace();
+
+    let login_params_user1 = server.mock(|when, then| {
+        when.method(POST)
+            .path("/v2/login-params")
+            .body_contains(r#""email":"user1@example.com""#);
+        then.status(200).json_body(json!({
+            "identifier": "user1@example.com",
+            "pw_nonce": TEST_PW_NONCE,
+            "version": "004"
+        }));
+    });
+    let login_user1 = server.mock(|when, then| {
+        when.method(POST)
+            .path("/v2/login")
+            .body_contains(r#""email":"user1@example.com""#);
+        then.status(200).json_body(json!({
+            "session": {
+                "access_token": "access-user1",
+                "refresh_token": "refresh-user1",
+                "access_expiration": 4102444800i64,
+                "refresh_expiration": 4102448400i64,
+                "readonly_access": false
+            },
+            "user": {
+                "uuid": "user1-uuid",
+                "email": "user1@example.com"
+            }
+        }));
+    });
+    let login_params_user2 = server.mock(|when, then| {
+        when.method(POST)
+            .path("/v2/login-params")
+            .body_contains(r#""email":"user2@example.com""#);
+        then.status(200).json_body(json!({
+            "identifier": "user2@example.com",
+            "pw_nonce": TEST_PW_NONCE,
+            "version": "004"
+        }));
+    });
+    let login_user2 = server.mock(|when, then| {
+        when.method(POST)
+            .path("/v2/login")
+            .body_contains(r#""email":"user2@example.com""#);
+        then.status(200).json_body(json!({
+            "session": {
+                "access_token": "access-user2",
+                "refresh_token": "refresh-user2",
+                "access_expiration": 4102450000i64,
+                "refresh_expiration": 4102453600i64,
+                "readonly_access": false
+            },
+            "user": {
+                "uuid": "user2-uuid",
+                "email": "user2@example.com"
+            }
+        }));
+    });
+
+    init_workspace(&workspace.path, &server.base_url());
+    let _ = run_auth_command(
+        &workspace.path,
+        &["auth", "login", "--json"],
+        Some(("user1@example.com", "password-123")),
+    );
+
+    let paths = resolve_workspace(Some(&workspace.path)).expect("resolve workspace");
+    fs::remove_dir_all(&paths.notes_dir).expect("remove notes dir");
+    fs::write(&paths.notes_dir, "blocking file").expect("create blocking file for mirror cleanup");
+
+    let rebind = run_auth_command(
+        &workspace.path,
+        &["--yes", "auth", "login", "--rebind-account", "--json"],
+        Some(("user2@example.com", "password-123")),
+    );
+    assert_eq!(rebind["ok"], true);
+    assert_eq!(rebind["result"]["email"], "user2@example.com");
+    assert!(rebind["result"].get("warning").is_some());
+    assert!(
+        rebind["result"]["warning"]
+            .as_str()
+            .is_some_and(|message| message.contains("failed to clear local mirror for rebind"))
+    );
+    assert!(
+        rebind["result"]["warning"]
+            .as_str()
+            .is_some_and(|message| message.contains("ink sync reset --yes"))
+    );
+
+    let stored = load_session_fixture(&workspace.path).expect("stored session");
+    assert_eq!(stored.email, "user2@example.com");
+
+    login_params_user1.assert_hits(1);
+    login_user1.assert_hits(1);
+    login_params_user2.assert_hits(1);
+    login_user2.assert_hits(1);
+}
+
+#[test]
+fn auth_login_rebind_failed_login_keeps_existing_state_and_binding() {
+    let server = MockServer::start();
+    let workspace = temp_workspace();
+
+    let login_params_user1 = server.mock(|when, then| {
+        when.method(POST)
+            .path("/v2/login-params")
+            .body_contains(r#""email":"user1@example.com""#);
+        then.status(200).json_body(json!({
+            "identifier": "user1@example.com",
+            "pw_nonce": TEST_PW_NONCE,
+            "version": "004"
+        }));
+    });
+    let login_user1 = server.mock(|when, then| {
+        when.method(POST)
+            .path("/v2/login")
+            .body_contains(r#""email":"user1@example.com""#);
+        then.status(200).json_body(json!({
+            "session": {
+                "access_token": "access-user1",
+                "refresh_token": "refresh-user1",
+                "access_expiration": 4102444800i64,
+                "refresh_expiration": 4102448400i64,
+                "readonly_access": false
+            },
+            "user": {
+                "uuid": "user1-uuid",
+                "email": "user1@example.com"
+            }
+        }));
+    });
+    let login_params_user2 = server.mock(|when, then| {
+        when.method(POST)
+            .path("/v2/login-params")
+            .body_contains(r#""email":"user2@example.com""#);
+        then.status(200).json_body(json!({
+            "identifier": "user2@example.com",
+            "pw_nonce": TEST_PW_NONCE,
+            "version": "004"
+        }));
+    });
+    let login_user2 = server.mock(|when, then| {
+        when.method(POST)
+            .path("/v2/login")
+            .body_contains(r#""email":"user2@example.com""#);
+        then.status(401).json_body(json!({
+            "data": {
+                "error": {
+                    "message": "invalid email or password"
+                }
+            }
+        }));
+    });
+
+    init_workspace(&workspace.path, &server.base_url());
+    let _ = run_auth_command(
+        &workspace.path,
+        &["auth", "login", "--json"],
+        Some(("user1@example.com", "password-123")),
+    );
+
+    let note_path = workspace.path.join("notes/rebind-failed.md");
+    fs::create_dir_all(
+        note_path
+            .parent()
+            .expect("test note should have a parent directory"),
+    )
+    .expect("create parent directory");
+    fs::write(&note_path, "# stale mirror note\n").expect("write stale mirror note");
+
+    let paths = resolve_workspace(Some(&workspace.path)).expect("resolve workspace");
+    fs::write(
+        &paths.mirror_index_path,
+        serde_json::to_string_pretty(&json!({
+            "version": 1,
+            "entries": [{
+                "uuid": "note-1",
+                "title": "Rebind Stale",
+                "path": "notes/rebind-failed.md",
+                "sha256": "dummy",
+                "remote_updated_at": "2026-02-28T00:00:00.000000Z"
+            }]
+        }))
+        .expect("encode mirror index"),
+    )
+    .expect("write mirror index");
+
+    let mut cmd = base_command(&workspace.path);
+    cmd.args(["--yes", "auth", "login", "--rebind-account", "--json"])
+        .env("SN_EMAIL", "user2@example.com")
+        .env("SN_PASSWORD", "password-123");
+    let assert = cmd.assert().code(3);
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).to_string();
+    let payload: Value = serde_json::from_str(&stderr).expect("json stderr");
+    assert_eq!(payload["ok"], false);
+    assert_eq!(payload["error"]["kind"], "auth");
+    assert!(
+        payload["error"]["message"]
+            .as_str()
+            .expect("error message")
+            .contains("http_status=401")
+    );
+
+    assert!(note_path.exists(), "mirror note should be unchanged");
+
+    let mirror_index_raw =
+        fs::read_to_string(&paths.mirror_index_path).expect("read reset mirror index");
+    let mirror_index: Value = serde_json::from_str(&mirror_index_raw).expect("parse mirror index");
+    assert_eq!(mirror_index["entries"].as_array().map(Vec::len), Some(1));
+
+    let stored = load_session_fixture(&workspace.path).expect("stored session");
+    assert_eq!(stored.email, "user1@example.com");
+
+    let config = load_config(&paths).expect("load workspace config");
+    assert_eq!(
+        config
+            .profiles
+            .get("default")
+            .and_then(|profile| profile.bound_email.as_deref()),
+        Some("user1@example.com")
     );
 
     login_params_user1.assert_hits(1);
@@ -906,6 +1367,14 @@ fn auth_refresh_fails_without_reauthentication_fallback() {
             .as_str()
             .expect("error message")
             .contains("http_status=500")
+    );
+
+    let stored = load_session_fixture(&workspace.path).expect("stored session");
+    assert!(
+        stored
+            .refresh_transport_last_error
+            .as_deref()
+            .is_some_and(|message| message.contains("http_status=500"))
     );
 
     login_params.assert_hits(1);

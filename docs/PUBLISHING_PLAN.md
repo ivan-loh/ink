@@ -23,16 +23,26 @@ This document describes how to ship `ink` binaries from GitHub Actions and publi
 
 ## Release Process
 
-1. Update version in workspace if needed.
-2. Commit version changes.
-3. Create and push a tag:
+1. Run release quality gates locally:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all --all-features
 ```
 
-4. GitHub Actions publishes binaries to the release page.
+2. Bump workspace version in root `Cargo.toml` under `[workspace.package]`.
+   All crates use `version.workspace = true`, so this single bump drives the binary/crate version.
+3. Commit version changes.
+4. Create and push a tag that matches the version:
+
+```bash
+git tag v1.0.4
+git push origin v1.0.4
+```
+
+5. GitHub Actions publishes binaries to the release page.
+6. Verify Homebrew tap workflow updated `Formula/ink.rb` to the same version/checksums.
 
 ## Package Manager Rollout
 

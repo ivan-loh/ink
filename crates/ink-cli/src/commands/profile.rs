@@ -1,7 +1,7 @@
 use ink_core::{ExitCode, InkResult};
 use ink_fs::{
-    init_workspace, list_profiles, load_config, resolve_profile, resolve_workspace, run_doctor,
-    save_config, set_active_profile, set_profile_server,
+    enforce_single_profile_workspace, init_workspace, list_profiles, load_config, resolve_profile,
+    resolve_workspace, run_doctor, save_config, set_active_profile, set_profile_server,
 };
 use ink_store::{SessionStore, resolve_env_credentials};
 use serde_json::json;
@@ -152,6 +152,7 @@ pub(crate) fn cmd_profile(command: ProfileCommand, globals: &GlobalOptions) -> I
 
     let paths = resolve_workspace(Some(&target))?;
     let mut config = load_config(&paths)?;
+    enforce_single_profile_workspace(&config)?;
 
     match command {
         ProfileCommand::List => {
@@ -193,7 +194,7 @@ pub(crate) fn cmd_profile(command: ProfileCommand, globals: &GlobalOptions) -> I
         }
         ProfileCommand::Set { name, server } => {
             let target_profile = name.unwrap_or_else(|| config.active_profile.clone());
-            set_profile_server(&mut config, &target_profile, &server);
+            set_profile_server(&mut config, &target_profile, &server)?;
             save_config(&paths, &config)?;
 
             let resolved = resolve_profile(&config, Some(&target_profile), None)?;

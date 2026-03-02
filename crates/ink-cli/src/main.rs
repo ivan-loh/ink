@@ -1,9 +1,10 @@
 mod commands;
 mod mirror;
+mod session_refresh;
 
 use chrono::Utc;
 use clap::{Parser, Subcommand, ValueEnum};
-use ink_api::{RefreshSessionRequest, StandardNotesApi};
+use ink_api::StandardNotesApi;
 use ink_core::{ExitCode, InkError, InkResult};
 use ink_fs::{WorkspacePaths, init_workspace, load_config, resolve_profile, resolve_workspace};
 use ink_store::SessionStore;
@@ -374,40 +375,7 @@ fn normalize_unix_timestamp_seconds(value: i64) -> i64 {
 }
 
 fn refresh_session_if_needed(ctx: &AuthContext) -> InkResult<()> {
-    let Some(stored) = ctx.sessions.load(&ctx.profile)? else {
-        return Ok(());
-    };
-
-    let now = Utc::now().timestamp();
-    let access_expiration = normalize_unix_timestamp_seconds(stored.session.access_expiration);
-    if access_expiration > now + 60 {
-        return Ok(());
-    }
-
-    let refresh_request =
-        RefreshSessionRequest::new(&stored.session.access_token, &stored.session.refresh_token)
-            .with_access_token_cookie(stored.access_token_cookie.as_deref())
-            .with_refresh_token_cookie(stored.refresh_token_cookie.as_deref())
-            .with_preferred_mode(stored.refresh_transport_mode);
-    let refresh_response = ctx.api.refresh_session(&refresh_request)?;
-    let refreshed_session = refresh_response.session.ok_or_else(|| {
-        InkError::auth("session refresh response did not include updated session payload")
-    })?;
-
-    ctx.sessions.mark_refreshed(
-        &ctx.profile,
-        refreshed_session,
-        refresh_response.access_token_cookie,
-        refresh_response.refresh_token_cookie,
-        refresh_response.mode_used,
-    )?;
-
-    let mut state = ctx.sessions.load_app_state(&ctx.profile)?;
-    state.mark_auth_ok();
-    state.last_sync_status = Some("session refreshed".to_string());
-    ctx.sessions.save_app_state(&ctx.profile, &state)?;
-
-    Ok(())
+    session_refresh::refresh_session_if_needed(ctx, 60).map(|_| ())
 }
 
 fn workspace_target(globals: &GlobalOptions) -> InkResult<PathBuf> {

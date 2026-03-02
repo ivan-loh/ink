@@ -110,6 +110,27 @@ pub fn load_config(paths: &WorkspacePaths) -> InkResult<WorkspaceConfig> {
     Ok(config)
 }
 
+pub fn enforce_single_profile_workspace(config: &WorkspaceConfig) -> InkResult<()> {
+    let has_default = config.profiles.contains_key(DEFAULT_PROFILE);
+    let only_default_profile = config.profiles.len() == 1 && has_default;
+    let active_is_default = config.active_profile == DEFAULT_PROFILE;
+    if only_default_profile && active_is_default {
+        return Ok(());
+    }
+
+    let mut profile_names: Vec<&str> = config.profiles.keys().map(String::as_str).collect();
+    profile_names.sort_unstable();
+    let profile_summary = if profile_names.is_empty() {
+        "<none>".to_string()
+    } else {
+        profile_names.join(", ")
+    };
+    Err(InkError::usage(format!(
+        "workspace config is not single-profile (active='{}', profiles=[{}]); only '{}' profile is supported. Use one dedicated workspace per account/server.",
+        config.active_profile, profile_summary, DEFAULT_PROFILE
+    )))
+}
+
 pub fn save_config(paths: &WorkspacePaths, config: &WorkspaceConfig) -> InkResult<()> {
     let serialized = toml::to_string_pretty(config)
         .map_err(|err| InkError::io(format!("failed to encode config.toml: {err}")))?;
@@ -138,28 +159,34 @@ pub fn list_profiles(config: &WorkspaceConfig) -> Vec<ProfileView> {
 }
 
 pub fn set_active_profile(config: &mut WorkspaceConfig, name: &str) -> InkResult<()> {
-    if !config.profiles.contains_key(name) {
+    enforce_single_profile_workspace(config)?;
+    if name != DEFAULT_PROFILE {
         return Err(InkError::usage(format!(
-            "profile '{name}' not found in workspace config"
+            "profile '{name}' is not supported; only '{}' profile is allowed per workspace. Use a dedicated workspace for each account/server.",
+            DEFAULT_PROFILE
         )));
     }
 
-    config.active_profile = name.to_string();
+    config.active_profile = DEFAULT_PROFILE.to_string();
     Ok(())
 }
 
-pub fn set_profile_server(config: &mut WorkspaceConfig, name: &str, server: &str) {
-    config.profiles.insert(
-        name.to_string(),
-        ProfileConfig {
-            server: server.to_string(),
-            bound_email: None,
-        },
-    );
-
-    if config.active_profile.is_empty() {
-        config.active_profile = name.to_string();
+pub fn set_profile_server(config: &mut WorkspaceConfig, name: &str, server: &str) -> InkResult<()> {
+    enforce_single_profile_workspace(config)?;
+    if name != DEFAULT_PROFILE {
+        return Err(InkError::usage(format!(
+            "profile '{name}' is not supported; only '{}' profile is allowed per workspace. Use a dedicated workspace for each account/server.",
+            DEFAULT_PROFILE
+        )));
     }
+    let profile = config.profiles.get_mut(DEFAULT_PROFILE).ok_or_else(|| {
+        InkError::usage(format!(
+            "profile '{}' not found in workspace config",
+            DEFAULT_PROFILE
+        ))
+    })?;
+    profile.server = server.to_string();
+    Ok(())
 }
 
 pub fn profile_bound_email<'a>(config: &'a WorkspaceConfig, name: &str) -> Option<&'a str> {
@@ -174,6 +201,12 @@ pub fn set_profile_bound_email(
     name: &str,
     email: Option<String>,
 ) -> InkResult<()> {
+    if name != DEFAULT_PROFILE {
+        return Err(InkError::usage(format!(
+            "profile '{name}' is not supported; only '{}' profile is allowed per workspace. Use a dedicated workspace for each account/server.",
+            DEFAULT_PROFILE
+        )));
+    }
     let profile = config.profiles.get_mut(name).ok_or_else(|| {
         InkError::usage(format!("profile '{name}' not found in workspace config"))
     })?;
@@ -186,10 +219,19 @@ pub fn resolve_profile(
     profile_override: Option<&str>,
     server_override: Option<&str>,
 ) -> InkResult<ResolvedProfile> {
-    let requested_profile = profile_override.unwrap_or(&config.active_profile);
-    let profile = config.profiles.get(requested_profile).ok_or_else(|| {
+    enforce_single_profile_workspace(config)?;
+    if let Some(requested_profile) = profile_override
+        && requested_profile != DEFAULT_PROFILE
+    {
+        return Err(InkError::usage(format!(
+            "profile '{requested_profile}' is not supported; only '{}' profile is allowed per workspace. Use a dedicated workspace for each account/server.",
+            DEFAULT_PROFILE
+        )));
+    }
+    let profile = config.profiles.get(DEFAULT_PROFILE).ok_or_else(|| {
         InkError::usage(format!(
-            "profile '{requested_profile}' not found in workspace config"
+            "profile '{}' not found in workspace config",
+            DEFAULT_PROFILE
         ))
     })?;
 
@@ -198,7 +240,7 @@ pub fn resolve_profile(
         .to_string();
 
     Ok(ResolvedProfile {
-        name: requested_profile.to_string(),
+        name: DEFAULT_PROFILE.to_string(),
         server,
     })
 }
