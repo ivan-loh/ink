@@ -41,6 +41,8 @@ pub struct DecryptedNote {
     pub title: String,
     pub text: String,
     pub updated_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra_content: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -359,11 +361,25 @@ impl<'a> SyncEngine<'a> {
                         .unwrap_or_default()
                         .to_string();
 
+                    let extra_content = if let Some(map) = content.as_object() {
+                        let mut extra = map.clone();
+                        extra.remove("title");
+                        extra.remove("text");
+                        if extra.is_empty() {
+                            None
+                        } else {
+                            Some(Value::Object(extra))
+                        }
+                    } else {
+                        None
+                    };
+
                     notes.push(DecryptedNote {
                         uuid: item.uuid,
                         title,
                         text,
                         updated_at: item.updated_at,
+                        extra_content,
                     });
                 }
                 Err(err) => {
@@ -442,11 +458,12 @@ impl<'a> SyncEngine<'a> {
         uuid: &str,
         title: &str,
         text: &str,
+        extra_content: Option<&Value>,
         items_key_id: &str,
         items_key: &str,
     ) -> InkResult<SyncItemInput> {
         let encrypted = encrypt_item_payload_004(
-            &json_note_content(title, text),
+            &json_note_content(title, text, extra_content),
             items_key,
             uuid,
             None,
@@ -569,11 +586,16 @@ impl<'a> SyncEngine<'a> {
     }
 }
 
-fn json_note_content(title: &str, text: &str) -> Value {
-    let mut map = Map::new();
+fn json_note_content(title: &str, text: &str, extra_content: Option<&Value>) -> Value {
+    let mut map = match extra_content.and_then(|v| v.as_object()) {
+        Some(base) => base.clone(),
+        None => Map::new(),
+    };
     map.insert("title".to_string(), Value::String(title.to_string()));
     map.insert("text".to_string(), Value::String(text.to_string()));
-    map.insert("references".to_string(), Value::Array(Vec::new()));
+    if !map.contains_key("references") {
+        map.insert("references".to_string(), Value::Array(Vec::new()));
+    }
     Value::Object(map)
 }
 
@@ -1386,7 +1408,7 @@ mod tests {
         .expect("encrypt items key");
 
         let encrypted_note = engine
-            .make_encrypted_note_item("note-1", "Hello", "World", "ik-1", &items_key)
+            .make_encrypted_note_item("note-1", "Hello", "World", None, "ik-1", &items_key)
             .expect("encrypt note");
 
         store

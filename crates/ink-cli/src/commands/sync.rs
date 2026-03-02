@@ -380,10 +380,15 @@ fn native_push(
             .clone()
             .unwrap_or_else(|| Uuid::new_v4().to_string());
 
+        let extra_content = remote_by_uuid
+            .get(&target_uuid)
+            .and_then(|note| note.extra_content.as_ref());
+
         let mut item = engine.make_encrypted_note_item(
             &target_uuid,
             &local_note.title,
             &local_note.text,
+            extra_content,
             &default_items_key.uuid,
             &default_items_key.items_key,
         )?;

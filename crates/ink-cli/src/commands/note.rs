@@ -211,6 +211,7 @@ pub(crate) fn cmd_note(command: NoteCommand, globals: &GlobalOptions) -> InkResu
                 &note_uuid,
                 &final_title,
                 &content,
+                None,
                 &default_items_key.uuid,
                 &default_items_key.items_key,
             )?;
@@ -280,6 +281,7 @@ pub(crate) fn cmd_note(command: NoteCommand, globals: &GlobalOptions) -> InkResu
                     &note_uuid,
                     &title,
                     &incoming_text,
+                    None,
                     &default_items_key.uuid,
                     &default_items_key.items_key,
                 )?;
@@ -313,6 +315,7 @@ pub(crate) fn cmd_note(command: NoteCommand, globals: &GlobalOptions) -> InkResu
                         &target.uuid,
                         &target.title,
                         &final_text,
+                        target.extra_content.as_ref(),
                         &default_items_key.uuid,
                         &default_items_key.items_key,
                     )?;
@@ -406,6 +409,7 @@ pub(crate) fn cmd_note(command: NoteCommand, globals: &GlobalOptions) -> InkResu
                 &target.uuid,
                 &final_title,
                 &final_text,
+                target.extra_content.as_ref(),
                 &default_items_key.uuid,
                 &default_items_key.items_key,
             )?;
