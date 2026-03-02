@@ -1,5 +1,5 @@
 use chrono::Utc;
-use ink_api::{KeyParamsData, SessionBody, SyncItem, UserData};
+use ink_api::{KeyParamsData, RefreshTransportMode, SessionBody, SyncItem, UserData};
 use ink_core::{InkError, InkResult};
 use ink_fs::WorkspacePaths;
 use rusqlite::{Connection, Error as SqlError, ErrorCode, OptionalExtension, params};
@@ -15,6 +15,12 @@ pub struct StoredSession {
     pub email: String,
     pub authenticated_at: String,
     pub refreshed_at: Option<String>,
+    #[serde(default)]
+    pub refresh_transport_mode: Option<RefreshTransportMode>,
+    #[serde(default)]
+    pub refresh_transport_confirmed_at: Option<String>,
+    #[serde(default)]
+    pub refresh_transport_last_error: Option<String>,
     #[serde(default)]
     pub master_key: Option<String>,
     pub session: SessionBody,
@@ -186,6 +192,7 @@ impl SessionStore {
         session_body: SessionBody,
         access_token_cookie: Option<String>,
         refresh_token_cookie: Option<String>,
+        refresh_transport_mode: Option<RefreshTransportMode>,
     ) -> InkResult<StoredSession> {
         let mut current = self.load(profile)?.ok_or_else(|| {
             InkError::auth(format!(
@@ -193,6 +200,7 @@ impl SessionStore {
             ))
         })?;
 
+        let now = Utc::now().to_rfc3339();
         current.session = session_body;
         if access_token_cookie.is_some() {
             current.access_token_cookie = access_token_cookie;
@@ -200,7 +208,12 @@ impl SessionStore {
         if refresh_token_cookie.is_some() {
             current.refresh_token_cookie = refresh_token_cookie;
         }
-        current.refreshed_at = Some(Utc::now().to_rfc3339());
+        if let Some(mode) = refresh_transport_mode {
+            current.refresh_transport_mode = Some(mode);
+            current.refresh_transport_confirmed_at = Some(now.clone());
+        }
+        current.refresh_transport_last_error = None;
+        current.refreshed_at = Some(now);
         self.save(profile, &current)?;
         Ok(current)
     }
@@ -310,6 +323,20 @@ impl SessionStore {
             .map_err(|err| sqlite_error("clear sync state", &self.db_path, err))?;
         conn.execute("DELETE FROM sync_items WHERE profile = ?1", params![key])
             .map_err(|err| sqlite_error("clear cached items", &self.db_path, err))?;
+        Ok(())
+    }
+
+    pub fn clear_profile_state(&self, profile: &str) -> InkResult<()> {
+        let key = profile_key(profile);
+        let conn = self.connection()?;
+        conn.execute("DELETE FROM sessions WHERE profile = ?1", params![key])
+            .map_err(|err| sqlite_error("clear session", &self.db_path, err))?;
+        conn.execute("DELETE FROM sync_state WHERE profile = ?1", params![key])
+            .map_err(|err| sqlite_error("clear sync state", &self.db_path, err))?;
+        conn.execute("DELETE FROM sync_items WHERE profile = ?1", params![key])
+            .map_err(|err| sqlite_error("clear cached items", &self.db_path, err))?;
+        conn.execute("DELETE FROM app_state WHERE profile = ?1", params![key])
+            .map_err(|err| sqlite_error("clear app state", &self.db_path, err))?;
         Ok(())
     }
 

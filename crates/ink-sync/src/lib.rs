@@ -1,5 +1,8 @@
 use chrono::Utc;
-use ink_api::{ItemsSyncRequest, ItemsSyncResponseData, StandardNotesApi, SyncItem, SyncItemInput};
+use ink_api::{
+    ItemsSyncRequest, ItemsSyncResponseData, RefreshSessionRequest, StandardNotesApi, SyncItem,
+    SyncItemInput,
+};
 use ink_core::{ErrorKind, InkError, InkResult};
 use ink_crypto::{decrypt_item_payload_004, encrypt_item_payload_004};
 use ink_store::{SessionStore, StoredSession};
@@ -509,11 +512,14 @@ impl<'a> SyncEngine<'a> {
                 Err(error) => {
                     if error.kind == ErrorKind::Auth && !refreshed {
                         refreshed = true;
-                        let refresh = self.api.refresh_session(
+                        let refresh_request = RefreshSessionRequest::new(
                             &session.session.access_token,
                             &session.session.refresh_token,
-                            session.refresh_token_cookie.as_deref(),
-                        )?;
+                        )
+                        .with_access_token_cookie(session.access_token_cookie.as_deref())
+                        .with_refresh_token_cookie(session.refresh_token_cookie.as_deref())
+                        .with_preferred_mode(session.refresh_transport_mode);
+                        let refresh = self.api.refresh_session(&refresh_request)?;
 
                         let refreshed_session = refresh.session.ok_or_else(|| {
                             InkError::auth(
@@ -526,6 +532,7 @@ impl<'a> SyncEngine<'a> {
                             refreshed_session,
                             refresh.access_token_cookie,
                             refresh.refresh_token_cookie,
+                            refresh.mode_used,
                         )?;
                         *session = updated;
                         continue;
@@ -791,7 +798,7 @@ mod tests {
     use super::*;
     use httpmock::Method::POST;
     use httpmock::MockServer;
-    use ink_api::{KeyParamsData, SessionBody};
+    use ink_api::{KeyParamsData, RefreshTransportMode, SessionBody};
     use ink_core::{ErrorKind, InkError};
     use ink_crypto::make_item_authenticated_data_004;
     use ink_fs::init_workspace;
@@ -805,6 +812,9 @@ mod tests {
             email: "user@example.com".to_string(),
             authenticated_at: "2026-02-28T00:00:00Z".to_string(),
             refreshed_at: None,
+            refresh_transport_mode: None,
+            refresh_transport_confirmed_at: None,
+            refresh_transport_last_error: None,
             master_key: Some(
                 "2396d6ac0bc70fe45db1d2bcf3daa522603e9c6fcc88dc933ce1a3a31bbc08ed".to_string(),
             ),
@@ -955,8 +965,11 @@ mod tests {
         let refresh = server.mock(|when, then| {
             when.method(POST)
                 .path("/v1/sessions/refresh")
-                .header("authorization", "Bearer 2:refresh-1")
-                .header("cookie", "refresh_token_a=one");
+                .header("cookie", "access_token_a=one; refresh_token_a=one")
+                .json_body(json!({
+                    "access_token": "2:access-1",
+                    "refresh_token": "2:refresh-1"
+                }));
             then.status(200)
                 .header("set-cookie", "access_token_b=two; Path=/")
                 .header("set-cookie", "refresh_token_b=two; Path=/")
@@ -1030,6 +1043,11 @@ mod tests {
             updated_session.access_token_cookie.as_deref(),
             Some("access_token_b=two")
         );
+        assert_eq!(
+            updated_session.refresh_transport_mode,
+            Some(RefreshTransportMode::DualCookieTokenBody)
+        );
+        assert!(updated_session.refresh_transport_confirmed_at.is_some());
 
         failed_push.assert_hits(1);
         refresh.assert_hits(1);

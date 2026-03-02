@@ -5,6 +5,7 @@
 # Local credentials and env files
 .env
 .env.*
+.env.mainaccount
 !.env.example
 .envrc
 *.pem
@@ -27,3 +28,4 @@ credentials/
 .vscode/
 # Local references (not committed)
 /references/
+/docs/archive/

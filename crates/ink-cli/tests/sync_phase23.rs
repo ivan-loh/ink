@@ -546,6 +546,9 @@ fn seed_session_with_access_expiration(workspace: &Path, server_url: &str, acces
         email: "user@example.com".to_string(),
         authenticated_at: "2026-02-28T00:00:00Z".to_string(),
         refreshed_at: None,
+        refresh_transport_mode: None,
+        refresh_transport_confirmed_at: None,
+        refresh_transport_last_error: None,
         master_key: Some(
             "2396d6ac0bc70fe45db1d2bcf3daa522603e9c6fcc88dc933ce1a3a31bbc08ed".to_string(),
         ),

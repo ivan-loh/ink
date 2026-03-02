@@ -1275,7 +1275,7 @@ dependencies = [
 
 [[package]]
 name = "ink-api"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "base64 0.22.1",
  "hex",
@@ -1286,11 +1286,12 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tracing",
 ]
 
 [[package]]
 name = "ink-cli"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "assert_cmd",
  "chrono",
@@ -1314,7 +1315,7 @@ dependencies = [
 
 [[package]]
 name = "ink-core"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -1322,7 +1323,7 @@ dependencies = [
 
 [[package]]
 name = "ink-crypto"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -1337,7 +1338,7 @@ dependencies = [
 
 [[package]]
 name = "ink-fs"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "ink-core",
  "serde",
@@ -1347,7 +1348,7 @@ dependencies = [
 
 [[package]]
 name = "ink-store"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "chrono",
  "ink-api",
@@ -1361,7 +1362,7 @@ dependencies = [
 
 [[package]]
 name = "ink-sync"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "chrono",
  "httpmock",

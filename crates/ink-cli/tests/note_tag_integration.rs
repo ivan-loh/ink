@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 #[test]
-fn phase4_note_commands_native_flow() {
+fn note_tag_note_commands_native_flow() {
     let server = MockServer::start();
     let workspace = temp_workspace();
     let fixtures = Fixtures::new();
@@ -132,7 +132,7 @@ fn phase4_note_commands_native_flow() {
 }
 
 #[test]
-fn phase4_tag_commands_native_flow() {
+fn note_tag_tag_commands_native_flow() {
     let server = MockServer::start();
     let workspace = temp_workspace();
     let fixtures = Fixtures::new();
@@ -206,7 +206,7 @@ fn phase4_tag_commands_native_flow() {
 }
 
 #[test]
-fn phase4_note_file_and_case_sensitive_branches() {
+fn note_tag_note_file_and_case_sensitive_branches() {
     let server = MockServer::start();
     let workspace = temp_workspace();
     let fixtures = Fixtures::new();
@@ -296,7 +296,7 @@ fn phase4_note_file_and_case_sensitive_branches() {
 }
 
 #[test]
-fn phase4_tag_parent_uuid_and_apply_auto_create_without_purge() {
+fn note_tag_tag_parent_uuid_and_apply_auto_create_without_purge() {
     let server = MockServer::start();
     let workspace = temp_workspace();
     let fixtures = Fixtures::new();
@@ -341,7 +341,7 @@ fn phase4_tag_parent_uuid_and_apply_auto_create_without_purge() {
 }
 
 #[test]
-fn phase4_usage_errors_require_yes() {
+fn note_tag_usage_errors_require_yes() {
     let server = MockServer::start();
     let workspace = temp_workspace();
 
@@ -371,7 +371,7 @@ fn phase4_usage_errors_require_yes() {
 }
 
 #[test]
-fn phase4_ambiguous_title_selector_errors() {
+fn note_tag_ambiguous_title_selector_errors() {
     let server = MockServer::start();
     let workspace = temp_workspace();
     let fixtures = Fixtures::new();
@@ -417,7 +417,7 @@ fn phase4_ambiguous_title_selector_errors() {
 }
 
 #[test]
-fn phase4_conflict_from_push_fails_command() {
+fn note_tag_conflict_from_push_fails_command() {
     let server = MockServer::start();
     let workspace = temp_workspace();
     let fixtures = Fixtures::new();
@@ -443,7 +443,7 @@ fn phase4_conflict_from_push_fails_command() {
 }
 
 #[test]
-fn phase4_llm_operability_resolve_upsert_and_paging() {
+fn note_tag_llm_operability_resolve_upsert_and_paging() {
     let server = MockServer::start();
     let workspace = temp_workspace();
     let fixtures = Fixtures::new();
@@ -777,6 +777,9 @@ fn seed_session(workspace: &Path, server_url: &str, master_key: &str) {
         email: "user@example.com".to_string(),
         authenticated_at: "2026-02-28T00:00:00Z".to_string(),
         refreshed_at: None,
+        refresh_transport_mode: None,
+        refresh_transport_confirmed_at: None,
+        refresh_transport_last_error: None,
         master_key: Some(master_key.to_string()),
         session: SessionBody {
             access_token: "access-token".to_string(),

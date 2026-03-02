@@ -19,6 +19,8 @@ pub struct WorkspaceConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileConfig {
     pub server: String,
+    #[serde(default)]
+    pub bound_email: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -41,6 +43,7 @@ impl WorkspaceConfig {
             DEFAULT_PROFILE.to_string(),
             ProfileConfig {
                 server: server.into(),
+                bound_email: None,
             },
         );
 
@@ -61,6 +64,7 @@ impl WorkspaceConfig {
                 DEFAULT_PROFILE.to_string(),
                 ProfileConfig {
                     server: DEFAULT_SERVER_URL.to_string(),
+                    bound_email: None,
                 },
             );
         }
@@ -78,6 +82,7 @@ impl WorkspaceConfig {
                     DEFAULT_PROFILE.to_string(),
                     ProfileConfig {
                         server: DEFAULT_SERVER_URL.to_string(),
+                        bound_email: None,
                     },
                 );
             }
@@ -148,12 +153,32 @@ pub fn set_profile_server(config: &mut WorkspaceConfig, name: &str, server: &str
         name.to_string(),
         ProfileConfig {
             server: server.to_string(),
+            bound_email: None,
         },
     );
 
     if config.active_profile.is_empty() {
         config.active_profile = name.to_string();
     }
+}
+
+pub fn profile_bound_email<'a>(config: &'a WorkspaceConfig, name: &str) -> Option<&'a str> {
+    config
+        .profiles
+        .get(name)
+        .and_then(|profile| profile.bound_email.as_deref())
+}
+
+pub fn set_profile_bound_email(
+    config: &mut WorkspaceConfig,
+    name: &str,
+    email: Option<String>,
+) -> InkResult<()> {
+    let profile = config.profiles.get_mut(name).ok_or_else(|| {
+        InkError::usage(format!("profile '{name}' not found in workspace config"))
+    })?;
+    profile.bound_email = email;
+    Ok(())
 }
 
 pub fn resolve_profile(

@@ -1,4 +1,4 @@
-use ink_api::{SessionBody, SyncItem};
+use ink_api::{RefreshTransportMode, SessionBody, SyncItem};
 use ink_fs::init_workspace;
 use ink_store::{AppState, SessionStore, StoredSession, SyncConflict, SyncState};
 use std::fs;
@@ -27,6 +27,9 @@ fn save_load_remove_session_round_trip() {
         email: "user@example.com".to_string(),
         authenticated_at: "2026-02-28T00:00:00Z".to_string(),
         refreshed_at: None,
+        refresh_transport_mode: None,
+        refresh_transport_confirmed_at: None,
+        refresh_transport_last_error: None,
         master_key: Some("master-1".to_string()),
         session: fixture_session("access-1", "refresh-1"),
         access_token_cookie: Some("access_token_abc=one".to_string()),
@@ -72,6 +75,9 @@ fn mark_refreshed_updates_tokens_and_timestamp() {
         email: "user@example.com".to_string(),
         authenticated_at: "2026-02-28T00:00:00Z".to_string(),
         refreshed_at: None,
+        refresh_transport_mode: None,
+        refresh_transport_confirmed_at: None,
+        refresh_transport_last_error: None,
         master_key: Some("master-old".to_string()),
         session: fixture_session("access-old", "refresh-old"),
         access_token_cookie: Some("access_token_old=abc".to_string()),
@@ -87,6 +93,7 @@ fn mark_refreshed_updates_tokens_and_timestamp() {
             fixture_session("access-new", "refresh-new"),
             Some("access_token_new=xyz".to_string()),
             Some("refresh_token_new=xyz".to_string()),
+            Some(RefreshTransportMode::TokenBody),
         )
         .expect("refresh");
 
@@ -101,6 +108,11 @@ fn mark_refreshed_updates_tokens_and_timestamp() {
         Some("refresh_token_new=xyz")
     );
     assert!(updated.refreshed_at.is_some());
+    assert_eq!(
+        updated.refresh_transport_mode,
+        Some(RefreshTransportMode::TokenBody)
+    );
+    assert!(updated.refresh_transport_confirmed_at.is_some());
 
     let loaded = store.load("default").expect("load").expect("session");
     assert_eq!(loaded.session.access_token, "access-new");
@@ -115,6 +127,10 @@ fn mark_refreshed_updates_tokens_and_timestamp() {
     );
     assert!(loaded.refreshed_at.is_some());
     assert_eq!(loaded.master_key.as_deref(), Some("master-old"));
+    assert_eq!(
+        loaded.refresh_transport_mode,
+        Some(RefreshTransportMode::TokenBody)
+    );
 }
 
 #[test]
@@ -233,6 +249,9 @@ fn migrates_legacy_json_payloads_on_first_open() {
         email: "legacy@example.com".to_string(),
         authenticated_at: "2026-02-28T00:00:00Z".to_string(),
         refreshed_at: None,
+        refresh_transport_mode: None,
+        refresh_transport_confirmed_at: None,
+        refresh_transport_last_error: None,
         master_key: Some("legacy-master".to_string()),
         session: fixture_session("legacy-access", "legacy-refresh"),
         access_token_cookie: None,

@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 #[test]
-fn phase5_mirror_rename_preserves_uuid_mapping_on_push() {
+fn mirror_conflicts_mirror_rename_preserves_uuid_mapping_on_push() {
     let server = MockServer::start();
     let workspace = temp_workspace();
     let fixtures = Fixtures::new();
@@ -70,7 +70,7 @@ fn phase5_mirror_rename_preserves_uuid_mapping_on_push() {
 }
 
 #[test]
-fn phase5_push_conflict_preserves_local_edit_and_lists_conflict() {
+fn mirror_conflicts_push_conflict_preserves_local_edit_and_lists_conflict() {
     let server = MockServer::start();
     let workspace = temp_workspace();
     let fixtures = Fixtures::new();
@@ -145,7 +145,7 @@ fn phase5_push_conflict_preserves_local_edit_and_lists_conflict() {
 }
 
 #[test]
-fn phase5_duplicate_uuid_files_are_reported_as_conflict() {
+fn mirror_conflicts_duplicate_uuid_files_are_reported_as_conflict() {
     let server = MockServer::start();
     let workspace = temp_workspace();
     let fixtures = Fixtures::new();
@@ -217,7 +217,7 @@ fn phase5_duplicate_uuid_files_are_reported_as_conflict() {
 }
 
 #[test]
-fn phase5_resolve_local_fails_when_conflict_persists() {
+fn mirror_conflicts_resolve_local_fails_when_conflict_persists() {
     let server = MockServer::start();
     let workspace = temp_workspace();
     let fixtures = Fixtures::new();
@@ -280,7 +280,7 @@ fn phase5_resolve_local_fails_when_conflict_persists() {
 }
 
 #[test]
-fn phase5_resolve_local_rejects_remote_only_conflict() {
+fn mirror_conflicts_resolve_local_rejects_remote_only_conflict() {
     let server = MockServer::start();
     let workspace = temp_workspace();
 
@@ -322,7 +322,7 @@ fn phase5_resolve_local_rejects_remote_only_conflict() {
 }
 
 #[test]
-fn phase5_local_resolve_preserves_unrelated_conflicts() {
+fn mirror_conflicts_local_resolve_preserves_unrelated_conflicts() {
     let server = MockServer::start();
     let workspace = temp_workspace();
     let fixtures = Fixtures::new();
@@ -443,7 +443,7 @@ fn phase5_local_resolve_preserves_unrelated_conflicts() {
 }
 
 #[test]
-fn phase5_resolve_local_works_after_conflict_file_move() {
+fn mirror_conflicts_resolve_local_works_after_conflict_file_move() {
     let server = MockServer::start();
     let workspace = temp_workspace();
     let fixtures = Fixtures::new();
@@ -740,6 +740,9 @@ fn seed_session(workspace: &Path, server_url: &str, master_key: &str) {
         email: "user@example.com".to_string(),
         authenticated_at: "2026-02-28T00:00:00Z".to_string(),
         refreshed_at: None,
+        refresh_transport_mode: None,
+        refresh_transport_confirmed_at: None,
+        refresh_transport_last_error: None,
         master_key: Some(master_key.to_string()),
         session: SessionBody {
             access_token: "access-token".to_string(),

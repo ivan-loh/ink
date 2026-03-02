@@ -1,6 +1,9 @@
 use httpmock::Method::{GET, POST};
 use httpmock::MockServer;
-use ink_api::{ItemsSyncRequest, SignInRequest, StandardNotesApi, SyncItemInput};
+use ink_api::{
+    ItemsSyncRequest, RefreshSessionRequest, RefreshTransportMode, SignInRequest, StandardNotesApi,
+    SyncItemInput,
+};
 use ink_core::ErrorKind;
 use serde_json::json;
 
@@ -215,13 +218,15 @@ fn refresh_session_returns_updated_session() {
 
     let api = StandardNotesApi::new(&server.base_url()).expect("api client");
     let response = api
-        .refresh_session("old-access", "old-refresh", None)
+        .refresh_session(&RefreshSessionRequest::new("old-access", "old-refresh"))
         .expect("refresh response");
 
     refresh.assert_hits(1);
     let session = response.session.expect("session");
     assert_eq!(session.access_token, "new-access");
     assert_eq!(session.refresh_token, "new-refresh");
+    assert_eq!(response.mode_used, Some(RefreshTransportMode::TokenBody));
+    assert!(!response.fallback_attempted);
 }
 
 #[test]
@@ -246,7 +251,7 @@ fn refresh_session_extracts_cookie_headers() {
 
     let api = StandardNotesApi::new(&server.base_url()).expect("api client");
     let response = api
-        .refresh_session("old-access", "old-refresh", None)
+        .refresh_session(&RefreshSessionRequest::new("old-access", "old-refresh"))
         .expect("refresh response");
 
     refresh.assert_hits(1);
@@ -261,16 +266,55 @@ fn refresh_session_extracts_cookie_headers() {
 }
 
 #[test]
-fn refresh_session_uses_cookie_flow_for_v2_tokens() {
+fn refresh_session_accepts_numeric_readonly_access_field() {
     let server = MockServer::start();
+
+    let refresh = server.mock(|when, then| {
+        when.method(POST).path("/v1/sessions/refresh");
+        then.status(200).json_body(json!({
+            "meta": {"auth": {}},
+            "data": {
+                "session": {
+                    "access_token": "new-access",
+                    "refresh_token": "new-refresh",
+                    "access_expiration": 2000002000,
+                    "refresh_expiration": 2000003000,
+                    "readonly_access": 0
+                }
+            }
+        }));
+    });
+
+    let api = StandardNotesApi::new(&server.base_url()).expect("api client");
+    let response = api
+        .refresh_session(&RefreshSessionRequest::new("old-access", "old-refresh"))
+        .expect("refresh response");
+
+    refresh.assert_hits(1);
+    let session = response.session.expect("session");
+    assert!(!session.readonly_access);
+}
+
+#[test]
+fn refresh_session_uses_dual_cookie_token_body_transport_for_v2_tokens() {
+    let server = MockServer::start();
+
+    let auth_probe = server.mock(|when, then| {
+        when.method(POST)
+            .path("/v1/sessions/refresh")
+            .header_exists("authorization");
+        then.status(500).json_body(json!({
+            "message": "unexpected bearer auth header"
+        }));
+    });
 
     let refresh = server.mock(|when, then| {
         when.method(POST)
             .path("/v1/sessions/refresh")
-            .header("authorization", "Bearer 2:refresh-token")
-            .header("cookie", "refresh_token_abc=xyz")
+            .header("cookie", "access_token_abc=xyz; refresh_token_abc=xyz")
             .json_body(json!({
-                "api": "20240226"
+                "access_token": "2:access-token",
+                "refresh_token": "2:refresh-token"
             }));
         then.status(200).json_body(json!({
             "session": {
@@ -286,29 +330,215 @@ fn refresh_session_uses_cookie_flow_for_v2_tokens() {
     let api = StandardNotesApi::new(&server.base_url()).expect("api client");
     let response = api
         .refresh_session(
-            "2:access-token",
-            "2:refresh-token",
-            Some("refresh_token_abc=xyz"),
+            &RefreshSessionRequest::new("2:access-token", "2:refresh-token")
+                .with_access_token_cookie(Some("access_token_abc=xyz"))
+                .with_refresh_token_cookie(Some("refresh_token_abc=xyz")),
         )
         .expect("refresh response");
 
+    auth_probe.assert_hits(0);
     refresh.assert_hits(1);
     let session = response.session.expect("session");
     assert_eq!(session.access_token, "2:new-access");
     assert_eq!(session.refresh_token, "2:new-refresh");
+    assert_eq!(
+        response.mode_used,
+        Some(RefreshTransportMode::DualCookieTokenBody)
+    );
+    assert!(!response.fallback_attempted);
 }
 
 #[test]
-fn refresh_session_cookie_flow_requires_cookie() {
+fn refresh_session_dual_cookie_transport_requires_both_cookies() {
     let server = MockServer::start();
     let api = StandardNotesApi::new(&server.base_url()).expect("api client");
 
     let error = api
-        .refresh_session("2:access-token", "2:refresh-token", None)
+        .refresh_session(
+            &RefreshSessionRequest::new("2:access-token", "2:refresh-token")
+                .with_refresh_token_cookie(Some("refresh_token_abc=xyz"))
+                .with_preferred_mode(Some(RefreshTransportMode::DualCookieTokenBody))
+                .with_fallback(false),
+        )
         .expect_err("should fail");
 
     assert_eq!(error.kind, ErrorKind::Auth);
-    assert!(error.message.contains("refresh token cookie missing"));
+    assert!(error.message.contains("access token cookie missing"));
+}
+
+#[test]
+fn refresh_session_falls_back_on_contract_mismatch() {
+    let server = MockServer::start();
+
+    let dual_cookie_first = server.mock(|when, then| {
+        when.method(POST)
+            .path("/v1/sessions/refresh")
+            .header("cookie", "access_token_abc=one; refresh_token_abc=one")
+            .json_body(json!({
+                "access_token": "2:access-token",
+                "refresh_token": "2:refresh-token"
+            }));
+        then.status(400).json_body(json!({
+            "message": "Please provide all required parameters."
+        }));
+    });
+
+    let token_body_fallback = server.mock(|when, then| {
+        when.method(POST)
+            .path("/v1/sessions/refresh")
+            .json_body(json!({
+                "access_token": "2:access-token",
+                "refresh_token": "2:refresh-token"
+            }));
+        then.status(200).json_body(json!({
+            "session": {
+                "access_token": "1:new-access",
+                "refresh_token": "1:new-refresh",
+                "access_expiration": 2000002000,
+                "refresh_expiration": 2000003000,
+                "readonly_access": false
+            }
+        }));
+    });
+
+    let api = StandardNotesApi::new(&server.base_url()).expect("api client");
+    let response = api
+        .refresh_session(
+            &RefreshSessionRequest::new("2:access-token", "2:refresh-token")
+                .with_access_token_cookie(Some("access_token_abc=one"))
+                .with_refresh_token_cookie(Some("refresh_token_abc=one")),
+        )
+        .expect("refresh response");
+
+    dual_cookie_first.assert_hits(1);
+    token_body_fallback.assert_hits(1);
+    assert!(response.fallback_attempted);
+    assert_eq!(response.mode_used, Some(RefreshTransportMode::TokenBody));
+    assert_eq!(
+        response.session.expect("session").access_token,
+        "1:new-access"
+    );
+}
+
+#[test]
+fn refresh_session_respects_preferred_mode_before_inference() {
+    let server = MockServer::start();
+
+    let dual_cookie_probe = server.mock(|when, then| {
+        when.method(POST)
+            .path("/v1/sessions/refresh")
+            .header("cookie", "access_token_abc=one; refresh_token_abc=one");
+        then.status(500).json_body(json!({
+            "message": "preferred mode should bypass this request"
+        }));
+    });
+
+    let token_body = server.mock(|when, then| {
+        when.method(POST)
+            .path("/v1/sessions/refresh")
+            .json_body(json!({
+                "access_token": "2:access-token",
+                "refresh_token": "2:refresh-token"
+            }));
+        then.status(200).json_body(json!({
+            "session": {
+                "access_token": "1:new-access",
+                "refresh_token": "1:new-refresh",
+                "access_expiration": 2000002000,
+                "refresh_expiration": 2000003000,
+                "readonly_access": false
+            }
+        }));
+    });
+
+    let api = StandardNotesApi::new(&server.base_url()).expect("api client");
+    let response = api
+        .refresh_session(
+            &RefreshSessionRequest::new("2:access-token", "2:refresh-token")
+                .with_access_token_cookie(Some("access_token_abc=one"))
+                .with_refresh_token_cookie(Some("refresh_token_abc=one"))
+                .with_preferred_mode(Some(RefreshTransportMode::TokenBody))
+                .with_fallback(false),
+        )
+        .expect("refresh response");
+
+    dual_cookie_probe.assert_hits(0);
+    token_body.assert_hits(1);
+    assert!(!response.fallback_attempted);
+    assert_eq!(response.mode_used, Some(RefreshTransportMode::TokenBody));
+}
+
+#[test]
+fn refresh_session_does_not_fallback_on_unauthorized() {
+    let server = MockServer::start();
+
+    let token_body = server.mock(|when, then| {
+        when.method(POST)
+            .path("/v1/sessions/refresh")
+            .json_body(json!({
+                "access_token": "2:access-token",
+                "refresh_token": "2:refresh-token"
+            }));
+        then.status(401).json_body(json!({
+            "message": "Invalid login credentials"
+        }));
+    });
+
+    let dual_cookie = server.mock(|when, then| {
+        when.method(POST)
+            .path("/v1/sessions/refresh")
+            .header("cookie", "access_token_abc=one; refresh_token_abc=one");
+        then.status(200).json_body(json!({
+            "session": {
+                "access_token": "never",
+                "refresh_token": "never",
+                "access_expiration": 2000002000,
+                "refresh_expiration": 2000003000,
+                "readonly_access": false
+            }
+        }));
+    });
+
+    let api = StandardNotesApi::new(&server.base_url()).expect("api client");
+    let error = api
+        .refresh_session(
+            &RefreshSessionRequest::new("2:access-token", "2:refresh-token")
+                .with_access_token_cookie(Some("access_token_abc=one"))
+                .with_refresh_token_cookie(Some("refresh_token_abc=one"))
+                .with_preferred_mode(Some(RefreshTransportMode::TokenBody)),
+        )
+        .expect_err("refresh should fail");
+
+    token_body.assert_hits(1);
+    dual_cookie.assert_hits(0);
+    assert_eq!(error.kind, ErrorKind::Auth);
+    assert!(error.message.contains("http_status=401"));
+}
+
+#[test]
+fn refresh_session_retries_transient_server_errors_before_failing() {
+    let server = MockServer::start();
+
+    let refresh = server.mock(|when, then| {
+        when.method(POST)
+            .path("/v1/sessions/refresh")
+            .json_body(json!({
+                "access_token": "old-access",
+                "refresh_token": "old-refresh"
+            }));
+        then.status(503).json_body(json!({
+            "message": "temporarily unavailable"
+        }));
+    });
+
+    let api = StandardNotesApi::new(&server.base_url()).expect("api client");
+    let error = api
+        .refresh_session(&RefreshSessionRequest::new("old-access", "old-refresh"))
+        .expect_err("refresh should fail after retries");
+
+    refresh.assert_hits(3);
+    assert_eq!(error.kind, ErrorKind::Sync);
+    assert!(error.message.contains("http_status=503"));
 }
 
 #[test]
@@ -461,6 +691,51 @@ fn sync_items_sends_authorization_cookie_and_tokens() {
     sync.assert_hits(1);
     assert_eq!(response.sync_token.as_deref(), Some("sync-2"));
     assert_eq!(response.saved_items.len(), 1);
+}
+
+#[test]
+fn sync_items_tolerates_null_content_and_enc_item_key() {
+    let server = MockServer::start();
+
+    let sync = server.mock(|when, then| {
+        when.method(POST)
+            .path("/v1/items")
+            .header("authorization", "Bearer access-token");
+        then.status(200).json_body(json!({
+            "data": {
+                "retrieved_items": [{
+                    "uuid": "item-1",
+                    "content_type": "Note",
+                    "content": null,
+                    "enc_item_key": null,
+                    "deleted": true
+                }],
+                "saved_items": [],
+                "conflicts": [],
+                "sync_token": "sync-2"
+            }
+        }));
+    });
+
+    let api = StandardNotesApi::new(&server.base_url()).expect("api client");
+    let response = api
+        .sync_items(
+            "access-token",
+            None,
+            &ItemsSyncRequest {
+                items: Vec::new(),
+                limit: Some(100),
+                sync_token: Some("sync-1".to_string()),
+                cursor_token: None,
+            },
+        )
+        .expect("sync response");
+
+    sync.assert_hits(1);
+    assert_eq!(response.retrieved_items.len(), 1);
+    assert_eq!(response.retrieved_items[0].content, "");
+    assert_eq!(response.retrieved_items[0].enc_item_key, "");
+    assert!(response.retrieved_items[0].deleted);
 }
 
 #[test]

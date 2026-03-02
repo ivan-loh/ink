@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::mirror::{
     LocalMirrorNote, MirrorNote, find_entry_by_uuid, load_index, load_index as load_mirror_index,
-    pull_to_mirror, scan_local_mirror,
+    notes_dir_for_profile, pull_to_mirror, scan_local_mirror,
 };
 use crate::{
     AuthContext, GlobalOptions, PushSummary, ResolveStrategy, SyncCommand, SyncSummary, print_json,
@@ -27,7 +27,7 @@ pub(crate) fn cmd_sync(command: SyncCommand, globals: &GlobalOptions) -> InkResu
                 println!(
                     "Mirrored {} notes into {}.",
                     summary.mirrored_notes,
-                    ctx.paths.notes_dir.display()
+                    notes_dir_for_profile(&ctx.paths, &ctx.profile).display()
                 );
                 if summary.removed_files > 0 {
                     println!("Removed {} stale mirrored files.", summary.removed_files);
@@ -55,7 +55,7 @@ pub(crate) fn cmd_sync(command: SyncCommand, globals: &GlobalOptions) -> InkResu
         }
         SyncCommand::Status => {
             let state = ctx.sessions.load_app_state(&ctx.profile)?;
-            let index = load_mirror_index(&ctx.paths)?;
+            let index = load_mirror_index(&ctx.paths, &ctx.profile)?;
             let sync_state = ctx.sessions.load_sync_state(&ctx.profile)?;
 
             if globals.json {
@@ -216,7 +216,7 @@ pub(crate) fn native_pull(ctx: &AuthContext, clear_conflicts: bool) -> InkResult
 
     let notes = engine.decrypted_notes(&master_key)?;
     let mirror_notes = to_mirror_notes(&notes);
-    let mirror = pull_to_mirror(&ctx.paths, &mirror_notes)?;
+    let mirror = pull_to_mirror(&ctx.paths, &ctx.profile, &mirror_notes)?;
 
     let mut state = ctx.sessions.load_app_state(&ctx.profile)?;
     state.mark_pull_ok();
@@ -266,8 +266,8 @@ fn native_push(
         InkError::sync("no decrypted items key available; run `ink sync pull` first")
     })?;
 
-    let index = load_index(&ctx.paths)?;
-    let local_notes = scan_local_mirror(&ctx.paths)?;
+    let index = load_index(&ctx.paths, &ctx.profile)?;
+    let local_notes = scan_local_mirror(&ctx.paths, &ctx.profile)?;
 
     let mut updated = 0usize;
     let mut created = 0usize;

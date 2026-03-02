@@ -3,7 +3,7 @@ mod mirror;
 
 use chrono::Utc;
 use clap::{Parser, Subcommand, ValueEnum};
-use ink_api::StandardNotesApi;
+use ink_api::{RefreshSessionRequest, StandardNotesApi};
 use ink_core::{ExitCode, InkError, InkResult};
 use ink_fs::{WorkspacePaths, init_workspace, load_config, resolve_profile, resolve_workspace};
 use ink_store::SessionStore;
@@ -88,9 +88,15 @@ enum ProfileCommand {
 
 #[derive(Debug, Subcommand)]
 enum AuthCommand {
-    Login,
+    Login {
+        #[arg(long)]
+        rebind_account: bool,
+    },
     Status,
-    Logout,
+    Logout {
+        #[arg(long)]
+        purge: bool,
+    },
     Refresh,
     Preflight,
 }
@@ -368,7 +374,7 @@ fn normalize_unix_timestamp_seconds(value: i64) -> i64 {
 }
 
 fn refresh_session_if_needed(ctx: &AuthContext) -> InkResult<()> {
-    let Some(mut stored) = ctx.sessions.load(&ctx.profile)? else {
+    let Some(stored) = ctx.sessions.load(&ctx.profile)? else {
         return Ok(());
     };
 
@@ -378,24 +384,23 @@ fn refresh_session_if_needed(ctx: &AuthContext) -> InkResult<()> {
         return Ok(());
     }
 
-    let refresh_response = ctx.api.refresh_session(
-        &stored.session.access_token,
-        &stored.session.refresh_token,
-        stored.refresh_token_cookie.as_deref(),
-    )?;
+    let refresh_request =
+        RefreshSessionRequest::new(&stored.session.access_token, &stored.session.refresh_token)
+            .with_access_token_cookie(stored.access_token_cookie.as_deref())
+            .with_refresh_token_cookie(stored.refresh_token_cookie.as_deref())
+            .with_preferred_mode(stored.refresh_transport_mode);
+    let refresh_response = ctx.api.refresh_session(&refresh_request)?;
     let refreshed_session = refresh_response.session.ok_or_else(|| {
         InkError::auth("session refresh response did not include updated session payload")
     })?;
 
-    stored.session = refreshed_session;
-    if refresh_response.access_token_cookie.is_some() {
-        stored.access_token_cookie = refresh_response.access_token_cookie;
-    }
-    if refresh_response.refresh_token_cookie.is_some() {
-        stored.refresh_token_cookie = refresh_response.refresh_token_cookie;
-    }
-    stored.refreshed_at = Some(Utc::now().to_rfc3339());
-    ctx.sessions.save(&ctx.profile, &stored)?;
+    ctx.sessions.mark_refreshed(
+        &ctx.profile,
+        refreshed_session,
+        refresh_response.access_token_cookie,
+        refresh_response.refresh_token_cookie,
+        refresh_response.mode_used,
+    )?;
 
     let mut state = ctx.sessions.load_app_state(&ctx.profile)?;
     state.mark_auth_ok();

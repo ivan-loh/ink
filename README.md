@@ -68,16 +68,22 @@ A workspace is the local root directory that `ink` manages.
 
 - `<workspace>/.ink/config.toml`: profiles and server endpoints
 - `<workspace>/.ink/state.db`: local SQLite state (sessions, sync cache, app state)
-- `<workspace>/notes`: readable mirrored note files
+- `<workspace>/notes`: mirrored note files for the `default` profile
+- `<workspace>/notes-<profile-key>`: mirrored note files for non-default profiles
+- `<workspace>/.ink/mirror-index.json`: mirror index for the `default` profile
+- `<workspace>/.ink/mirror-index-<profile-key>.json`: mirror index for non-default profiles
 
 You can use multiple workspaces to isolate accounts, profiles, or test data.
 
 ## Session Model
 
 - `ink auth login` exchanges credentials for session tokens (access + refresh) and stores them in `.ink/state.db`.
+- Profiles are account-bound after login; switching to a different email on the same profile requires `ink --yes auth login --rebind-account`.
 - `ink auth status` checks auth state and auto-refreshes close-to-expiry sessions.
 - `ink auth refresh` forces refresh; if refresh fails, run `ink auth login` again.
 - Session-backed commands (`sync`, `note`, `tag`) automatically refresh near-expiry sessions before running.
+- Refresh transport compatibility is persisted per profile (`token_body` or `dual_cookie_token_body`) with one-step fallback on contract mismatch.
+- Refresh retries transient network/server failures with bounded backoff.
 
 Standard Notes login payloads include an `ephemeral` flag; `ink` currently uses `ephemeral: false` (persistent session behavior).
 
@@ -96,10 +102,12 @@ ink profile use <profile> --workspace <path>
 
 ```bash
 ink auth login --workspace <path>
+ink --yes auth login --rebind-account --workspace <path>
 ink auth preflight --workspace <path> --json
 ink auth status --workspace <path>
 ink auth refresh --workspace <path>
 ink auth logout --workspace <path>
+ink --yes auth logout --purge --workspace <path>
 ```
 
 - Sync:
@@ -144,7 +152,16 @@ ink tag apply --note <note-selector> --tag <tag-selector> --workspace <path>
 - Global flags: `--workspace`, `--profile`, `--server`, `--json`, `--yes`.
 - If `--workspace` is omitted, the default is `sandbox/workspace`.
 - Local state is stored in `.ink/state.db` (SQLite).
-- Mirrored note files are under `<workspace>/notes`.
+- Mirrored note files are profile-scoped:
+  - `default` profile uses `<workspace>/notes`
+  - non-default profiles use `<workspace>/notes-<profile-key>`
+- `--debug` enables verbose API response diagnostics (target `ink_api::http`).
+- Set `INK_API_DEBUG_RAW=1` to include raw API response previews in debug logs (sensitive).
+- Set `INK_API_DEBUG_MAX_CHARS=<n>` to control raw preview length (default `2000` chars).
+- Session refresh uses adaptive transport compatibility (`token_body` and `dual_cookie_token_body`) and persists the last successful mode per profile.
+- Set `INK_API_REFRESH_FALLBACK=0` to disable refresh-mode fallback when doing strict transport diagnostics.
+- Set `INK_API_REFRESH_RETRY_ATTEMPTS=<n>` to control transient refresh retry count (default `2`, max `6`).
+- Set `INK_API_REFRESH_RETRY_BASE_DELAY_MS=<ms>` to control base retry delay (default `100`, max `10000`).
 
 ## Automation
 

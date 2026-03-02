@@ -1,23 +1,27 @@
 use chrono::Utc;
-use ink_api::SignInRequest;
+use ink_api::{RefreshSessionRequest, SignInRequest};
 use ink_core::{ExitCode, InkError, InkResult};
 use ink_crypto::{derive_root_credentials_004, normalize_email};
+use ink_fs::{load_config, profile_bound_email, save_config, set_profile_bound_email};
 use ink_store::{StoredSession, resolve_env_credentials};
 use serde_json::json;
 
 use crate::{
-    AuthCommand, AuthContext, GlobalOptions, normalize_unix_timestamp_seconds, print_json,
-    with_auth_context,
+    AuthCommand, AuthContext, GlobalOptions, mirror::clear_local_mirror,
+    normalize_unix_timestamp_seconds, print_json, with_auth_context,
 };
 
 pub(crate) fn cmd_auth(command: AuthCommand, globals: &GlobalOptions) -> InkResult<ExitCode> {
     with_auth_context(globals, false, |ctx| match command {
-        AuthCommand::Login => {
+        AuthCommand::Login { rebind_account } => {
             let credentials = resolve_env_credentials(&ctx.paths.root)?.ok_or_else(|| {
                 InkError::auth(
                     "missing credentials; set SN_EMAIL and SN_PASSWORD in environment or .env",
                 )
             })?;
+            let normalized_email = normalize_email(&credentials.email);
+
+            enforce_profile_account_binding(&ctx, globals, &normalized_email, rebind_account)?;
 
             let stored =
                 login_with_email_password(&ctx, &credentials.email, &credentials.password)?;
@@ -28,6 +32,7 @@ pub(crate) fn cmd_auth(command: AuthCommand, globals: &GlobalOptions) -> InkResu
             state.mark_auth_ok();
             state.last_sync_status = Some("authenticated".to_string());
             ctx.sessions.save_app_state(&ctx.profile, &state)?;
+            bind_profile_email(&ctx, &stored.email)?;
 
             if globals.json {
                 print_json(&json!({
@@ -80,26 +85,27 @@ pub(crate) fn cmd_auth(command: AuthCommand, globals: &GlobalOptions) -> InkResu
             let access_expiration =
                 normalize_unix_timestamp_seconds(stored.session.access_expiration);
             if access_expiration <= now + 60 {
-                let refresh_response = ctx.api.refresh_session(
+                let refresh_request = RefreshSessionRequest::new(
                     &stored.session.access_token,
                     &stored.session.refresh_token,
-                    stored.refresh_token_cookie.as_deref(),
-                )?;
+                )
+                .with_access_token_cookie(stored.access_token_cookie.as_deref())
+                .with_refresh_token_cookie(stored.refresh_token_cookie.as_deref())
+                .with_preferred_mode(stored.refresh_transport_mode);
+                let refresh_response = ctx.api.refresh_session(&refresh_request)?;
                 let refreshed_session = refresh_response.session.ok_or_else(|| {
                     InkError::auth(
                         "session refresh response did not include updated session payload",
                     )
                 })?;
 
-                stored.session = refreshed_session;
-                if refresh_response.access_token_cookie.is_some() {
-                    stored.access_token_cookie = refresh_response.access_token_cookie;
-                }
-                if refresh_response.refresh_token_cookie.is_some() {
-                    stored.refresh_token_cookie = refresh_response.refresh_token_cookie;
-                }
-                stored.refreshed_at = Some(Utc::now().to_rfc3339());
-                ctx.sessions.save(&ctx.profile, &stored)?;
+                stored = ctx.sessions.mark_refreshed(
+                    &ctx.profile,
+                    refreshed_session,
+                    refresh_response.access_token_cookie,
+                    refresh_response.refresh_token_cookie,
+                    refresh_response.mode_used,
+                )?;
                 state.mark_auth_ok();
                 state.last_sync_status = Some("session refreshed".to_string());
                 ctx.sessions.save_app_state(&ctx.profile, &state)?;
@@ -136,7 +142,13 @@ pub(crate) fn cmd_auth(command: AuthCommand, globals: &GlobalOptions) -> InkResu
 
             Ok(ExitCode::Success)
         }
-        AuthCommand::Logout => {
+        AuthCommand::Logout { purge } => {
+            if purge && !globals.yes {
+                return Err(InkError::usage(
+                    "auth logout --purge is destructive; rerun with --yes",
+                ));
+            }
+
             let mut remote_sign_out = false;
             let mut remote_warning = None;
             if let Some(stored) = ctx.sessions.load(&ctx.profile)? {
@@ -150,12 +162,21 @@ pub(crate) fn cmd_auth(command: AuthCommand, globals: &GlobalOptions) -> InkResu
                 }
             }
 
-            ctx.sessions.remove(&ctx.profile)?;
+            let mut removed_mirror_files = None;
+            let mut removed_mirror_dir: Option<String> = None;
+            if purge {
+                ctx.sessions.clear_profile_state(&ctx.profile)?;
+                let mirror = clear_local_mirror(&ctx.paths, &ctx.profile)?;
+                removed_mirror_files = Some(mirror.removed_files);
+                removed_mirror_dir = Some(mirror.notes_dir);
+            } else {
+                ctx.sessions.remove(&ctx.profile)?;
 
-            let mut state = ctx.sessions.load_app_state(&ctx.profile)?;
-            state.last_auth_at = None;
-            state.last_sync_status = Some("logged out".to_string());
-            ctx.sessions.save_app_state(&ctx.profile, &state)?;
+                let mut state = ctx.sessions.load_app_state(&ctx.profile)?;
+                state.last_auth_at = None;
+                state.last_sync_status = Some("logged out".to_string());
+                ctx.sessions.save_app_state(&ctx.profile, &state)?;
+            }
 
             if globals.json {
                 print_json(&json!({
@@ -165,10 +186,25 @@ pub(crate) fn cmd_auth(command: AuthCommand, globals: &GlobalOptions) -> InkResu
                         "server": ctx.server,
                         "remote_sign_out": remote_sign_out,
                         "warning": remote_warning,
+                        "purged_local_state": purge,
+                        "removed_mirror_files": removed_mirror_files,
                     }
                 }))?;
             } else {
-                println!("Local session removed for profile '{}'.", ctx.profile);
+                if purge {
+                    println!("Local profile state purged for '{}'.", ctx.profile);
+                    println!(
+                        "Removed {} mirrored note file(s) from {}.",
+                        removed_mirror_files.unwrap_or(0),
+                        removed_mirror_dir.unwrap_or_else(|| ctx
+                            .paths
+                            .notes_dir
+                            .display()
+                            .to_string())
+                    );
+                } else {
+                    println!("Local session removed for profile '{}'.", ctx.profile);
+                }
                 if remote_sign_out {
                     println!("Server session invalidated.");
                 } else if let Some(warning) = remote_warning {
@@ -186,11 +222,14 @@ pub(crate) fn cmd_auth(command: AuthCommand, globals: &GlobalOptions) -> InkResu
                 ))
             })?;
 
-            let refresh_response = ctx.api.refresh_session(
+            let refresh_request = RefreshSessionRequest::new(
                 &stored.session.access_token,
                 &stored.session.refresh_token,
-                stored.refresh_token_cookie.as_deref(),
-            )?;
+            )
+            .with_access_token_cookie(stored.access_token_cookie.as_deref())
+            .with_refresh_token_cookie(stored.refresh_token_cookie.as_deref())
+            .with_preferred_mode(stored.refresh_transport_mode);
+            let refresh_response = ctx.api.refresh_session(&refresh_request)?;
             let refreshed = refresh_response.session.ok_or_else(|| {
                 InkError::auth("session refresh response did not include session payload")
             })?;
@@ -200,6 +239,7 @@ pub(crate) fn cmd_auth(command: AuthCommand, globals: &GlobalOptions) -> InkResu
                 refreshed,
                 refresh_response.access_token_cookie,
                 refresh_response.refresh_token_cookie,
+                refresh_response.mode_used,
             )?;
 
             let mut state = ctx.sessions.load_app_state(&ctx.profile)?;
@@ -326,6 +366,9 @@ fn login_with_email_password(
         email: normalized_email,
         authenticated_at: Utc::now().to_rfc3339(),
         refreshed_at: None,
+        refresh_transport_mode: None,
+        refresh_transport_confirmed_at: None,
+        refresh_transport_last_error: None,
         master_key: Some(derived.master_key),
         session,
         access_token_cookie: sign_in.access_token_cookie,
@@ -333,4 +376,60 @@ fn login_with_email_password(
         user: sign_in.user,
         key_params: sign_in.key_params.or(Some(login_params.key_params)),
     })
+}
+
+fn enforce_profile_account_binding(
+    ctx: &AuthContext,
+    globals: &GlobalOptions,
+    normalized_email: &str,
+    rebind_account: bool,
+) -> InkResult<()> {
+    let mut config = load_config(&ctx.paths)?;
+    let Some(bound_email) = profile_bound_email(&config, &ctx.profile) else {
+        return Ok(());
+    };
+    let normalized_bound_email = normalize_email(bound_email);
+    if normalized_bound_email == normalized_email {
+        return Ok(());
+    }
+
+    if !rebind_account {
+        return Err(InkError::usage(format!(
+            "profile '{}' in workspace '{}' is bound to '{}'; refusing login as '{}'. Use a different profile/workspace, or rerun with `ink --yes auth login --rebind-account` to intentionally switch this profile.",
+            ctx.profile,
+            ctx.paths.root.display(),
+            bound_email,
+            normalized_email
+        )));
+    }
+    if !globals.yes {
+        return Err(InkError::usage(
+            "auth login --rebind-account is destructive for local profile state; rerun with --yes",
+        ));
+    }
+
+    ctx.sessions.clear_profile_state(&ctx.profile)?;
+    clear_local_mirror(&ctx.paths, &ctx.profile)?;
+    set_profile_bound_email(
+        &mut config,
+        &ctx.profile,
+        Some(normalized_email.to_string()),
+    )?;
+    save_config(&ctx.paths, &config)?;
+    Ok(())
+}
+
+fn bind_profile_email(ctx: &AuthContext, email: &str) -> InkResult<()> {
+    let normalized_email = normalize_email(email);
+    let mut config = load_config(&ctx.paths)?;
+    let already_bound = profile_bound_email(&config, &ctx.profile)
+        .map(normalize_email)
+        .as_deref()
+        == Some(normalized_email.as_str());
+    if already_bound {
+        return Ok(());
+    }
+
+    set_profile_bound_email(&mut config, &ctx.profile, Some(normalized_email))?;
+    save_config(&ctx.paths, &config)
 }
